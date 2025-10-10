@@ -36,6 +36,7 @@ data/
 *.pkl
 checkpoints/
 results/
+local_logs/
 
 # Comet ML cache
 .comet.config

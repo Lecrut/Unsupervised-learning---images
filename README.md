@@ -47,6 +47,36 @@ lub
 jupyter lab main.ipynb
 ```
 
+## 🔧 Opcje logowania
+
+### ⚡ Szybkie testowanie
+Dla szybkich testów zmień w notebooku:
+```python
+DATASET_SIZE = 'test'  # 100 obrazów, ~2 minuty trenowania
+```
+
+Inne opcje:
+```python
+DATASET_SIZE = 500     # ~5 minut trenowania
+DATASET_SIZE = 1000    # ~10 minut trenowania  
+DATASET_SIZE = 0.1     # 10% datasetu
+DATASET_SIZE = 'full'  # Pełny dataset (długo!)
+```
+
+### 📁 Bez zewnętrznych serwisów (domyślnie)
+- Ustaw `USE_COMET = False` i `USE_LOCAL_LOGGER = True`
+- Wszystkie wyniki zapisywane lokalnie w folderze `local_logs/`
+- Wykresy i metryki automatycznie zapisywane jako pliki
+
+### 📊 Z Comet ML (opcjonalnie)
+- Ustaw `USE_COMET = True` w notebooku
+- Dodaj swój API key do konfiguracji Comet ML
+- Rejestracja na [comet.ml](https://www.comet.ml) wymagana
+
+### 📝 Tylko konsola
+- Ustaw `USE_COMET = False` i `USE_LOCAL_LOGGER = False`
+- Wyniki tylko w konsoli, bez zapisywania
+
 ### 4. Deaktywacja środowiska (po zakończeniu pracy)
 ```powershell
 deactivate
@@ -114,7 +144,14 @@ Unsupervised-learning---images/
   - Decoder: 3 warstwy transponowane konwolucyjne
   - Metody: `encode()`, `decode()`, `reconstruct()`
 
-### 💥 `src/data/damages.py`
+### � `src/data/sampling.py`
+- `LimitedDataset` - ogranicza liczbę próbek  
+- `QuickTestDataset` - mały dataset do testów (50-100 próbek)
+- `StratifiedLimitedDataset` - zachowuje proporcje klas
+- `sample_dataset()` - różne metody próbkowania
+- Obsługa: pełny dataset, konkretna liczba, procent
+
+### �💥 `src/data/damages.py`
 - `random_mask()` - losowe białe plamy
 - `rectangular_mask()` - prostokątne maski
 - `noise_mask()` - szum w pikselach
