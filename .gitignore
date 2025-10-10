@@ -1,0 +1,41 @@
+# Wirtualne środowisko
+venv/
+env/
+.venv/
+.env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Comet ML
+.comet/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Data files (dodaj jeśli będziesz miał duże pliki danych)
+data/
+*.pth
+*.pkl
+checkpoints/
+results/
+
+# Comet ML cache
+.comet.config

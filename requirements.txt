@@ -1,0 +1,21 @@
+# Podstawowe biblioteki do obliczeń naukowych i wizualizacji
+numpy>=1.21.0
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# PyTorch i torchvision do deep learning
+torch>=1.12.0
+torchvision>=0.13.0
+
+# Scikit-learn do klasycznego machine learning (KMeans)
+scikit-learn>=1.1.0
+
+# UMAP do redukcji wymiarowości
+umap-learn>=0.5.3
+
+# Comet ML do trackowania eksperymentów
+comet_ml>=3.31.0
+
+# Jupyter notebook (jeśli ktoś chce uruchomić lokalnie)
+jupyter>=1.0.0
+notebook>=6.4.0
