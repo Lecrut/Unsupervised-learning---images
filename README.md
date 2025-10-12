@@ -69,9 +69,20 @@ DATASET_SIZE = 'full'  # Pełny dataset (długo!)
 - Wykresy i metryki automatycznie zapisywane jako pliki
 
 ### 📊 Z Comet ML (opcjonalnie)
-- Ustaw `USE_COMET = True` w notebooku
-- Dodaj swój API key do konfiguracji Comet ML
-- Rejestracja na [comet.ml](https://www.comet.ml) wymagana
+1. Skopiuj plik `.env.template` jako `.env`:
+   ```bash
+   copy .env.template .env
+   ```
+2. Edytuj plik `.env` i uzupełnij swoje dane:
+   ```env
+   COMET_API_KEY=twoj_api_key_z_comet_ml
+   COMET_PROJECT_NAME=nazwa_projektu
+   COMET_WORKSPACE=twoj_workspace
+   ```
+3. Ustaw `USE_COMET = True` w notebooku
+4. Rejestracja na [comet.ml](https://www.comet.ml) wymagana
+
+**Ważne:** Plik `.env` jest automatycznie ignorowany przez git, więc twoje dane pozostają bezpieczne.
 
 ### 📝 Tylko konsola
 - Ustaw `USE_COMET = False` i `USE_LOCAL_LOGGER = False`
