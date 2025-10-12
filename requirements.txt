@@ -22,3 +22,6 @@ python-dotenv>=0.19.0
 # Jupyter notebook (jeśli ktoś chce uruchomić lokalnie)
 jupyter>=1.0.0
 notebook>=6.4.0
+
+#biblioteka do pobierania datasets
+datasets
