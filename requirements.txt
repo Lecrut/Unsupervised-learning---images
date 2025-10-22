@@ -13,6 +13,9 @@ scikit-learn>=1.1.0
 # UMAP do redukcji wymiarowości
 umap-learn>=0.5.3
 
+# PyTorch SSIM do obliczania strukturalnego podobieństwa obrazów
+pytorch-msssim>=0.2.1
+
 # Comet ML do trackowania eksperymentów
 comet_ml>=3.31.0
 

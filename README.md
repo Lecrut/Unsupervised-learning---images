@@ -218,3 +218,13 @@ Unsupervised-learning---images/
 ## Wymagania systemowe
 - Python 3.8+
 - CUDA (opcjonalnie, dla GPU)
+
+## Główne zależności
+- **PyTorch** - framework do deep learning
+- **torchvision** - narzędzia do przetwarzania obrazów
+- **pytorch-msssim** - obliczanie SSIM (Structural Similarity Index) dla obrazów
+- **scikit-learn** - algorytmy klasteryzacji (KMeans)
+- **UMAP** - redukcja wymiarowości
+- **Comet ML** - trackowanie eksperymentów (opcjonalne)
+- **python-dotenv** - zarządzanie zmiennymi środowiskowymi
+- **Jupyter** - środowisko notebookowe
