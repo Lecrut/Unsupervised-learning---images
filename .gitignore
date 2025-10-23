@@ -40,6 +40,20 @@ Thumbs.db
 checkpoints/
 results/
 local_logs/
+/models/
+*.h5
+*.onnx
 
 # Comet ML cache
 .comet.config
+
+# Temporary files
+*.tmp
+*.log
+*.cache
+
+# Streamlit
+.streamlit/
+
+# Notebooks autosave
+*.ipynb~

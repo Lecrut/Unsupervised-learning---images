@@ -1,6 +1,46 @@
 # Unsupervised Learning - Images
 
-Projekt zawierający implementację autoencodera z klasteryzacją i inpaintingiem obrazów.
+Projekt zawierający kompletną implementację systemu przetwarzania obrazów dzieł sztuki z wykorzystaniem metod uczenia nienadzorowanego:
+- **Autoencoder** + klasteryzacja przestrzeni latentnej
+- **Inpainting** - uzupełnianie uszkodzonych fragmentów (proste i nieregularne)
+- **Super-Resolution** - zwiększanie rozdzielczości obrazów
+- **GUI** - interfejs Streamlit do demonstracji
+
+## 🎯 Cele projektu
+
+Projekt realizuje założenia dla ocen:
+- **3.0:** ✅ Autoencoder + klasteryzacja + inpainting prostych masek
+- **4.0:** ✅ Rozszerzenie o moduł super-resolution
+- **5.0:** ✅ Inpainting nieregularnych uszkodzeń + GUI + kompletna analiza
+
+## 📁 Struktura projektu
+
+```
+Unsupervised-learning---images/
+├── main.ipynb              # 🚀 Główny notebook z eksperymentami
+├── src/                    # Kod źródłowy
+│   ├── models/            
+│   │   ├── autoencoder.py          # Konwolucyjny autoencoder
+│   │   ├── inpainting_model.py     # U-Net, PartialConv, SimpleInpainting
+│   │   └── superres_model.py       # SuperRes, LightweightSR, ESPCN
+│   ├── data/              
+│   │   ├── damages.py              # Generowanie uszkodzeń (maski, szum, linie)
+│   │   ├── sampling.py             # Podział i próbkowanie danych
+│   │   ├── splitting.py            # Train/val/test split, cross-validation
+│   │   └── augmentations.py        # Augmentacje danych
+│   └── utils/             
+│       ├── training.py             # Funkcje trenowania z early stopping
+│       ├── analysis.py             # Klasteryzacja (KMeans, DBSCAN, GMM)
+│       ├── visualization.py        # Wizualizacje (UMAP, rekonstrukcje)
+│       ├── metrics.py              # SSIM, PSNR, MSE, MAE
+│       └── local_logger.py         # Logowanie lokalne
+├── app_gui/               
+│   └── app.py                      # 🎨 GUI Streamlit
+├── local_logs/                     # Logi eksperymentów
+├── data/                           # Dane (WikiArt)
+├── requirements.txt                # Zależności
+└── README.md                       # Ten plik
+```
 
 ## Instalacja
 

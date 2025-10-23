@@ -73,15 +73,17 @@ def extract_latent_vectors(model: torch.nn.Module,
 def cluster_latent_space(latent_vectors: np.ndarray,
                         n_clusters: int = 10,
                         algorithm: str = 'kmeans',
-                        random_state: int = 42) -> Tuple[np.ndarray, dict]:
+                        random_state: int = 42,
+                        **kwargs) -> Tuple[np.ndarray, dict]:
     """
     Klasteryzuje wektory latentne.
     
     Args:
         latent_vectors: array z wektorami latentnymi
         n_clusters: liczba klastrów
-        algorithm: algorytm klasteryzacji ('kmeans', 'spectral', 'dbscan')
+        algorithm: algorytm klasteryzacji ('kmeans', 'spectral', 'dbscan', 'gaussian_mixture')
         random_state: seed dla reprodukowalności
+        **kwargs: dodatkowe argumenty dla algorytmu
         
     Returns:
         Tuple: (etykiety_klastrów, słownik_z_metrykami)
@@ -90,13 +92,31 @@ def cluster_latent_space(latent_vectors: np.ndarray,
     
     if algorithm == 'kmeans':
         from sklearn.cluster import KMeans
-        clusterer = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
+        clusterer = KMeans(
+            n_clusters=n_clusters, 
+            random_state=random_state, 
+            n_init=kwargs.get('n_init', 10)
+        )
     elif algorithm == 'spectral':
         from sklearn.cluster import SpectralClustering
-        clusterer = SpectralClustering(n_clusters=n_clusters, random_state=random_state)
+        clusterer = SpectralClustering(
+            n_clusters=n_clusters, 
+            random_state=random_state,
+            affinity=kwargs.get('affinity', 'rbf')
+        )
     elif algorithm == 'dbscan':
         from sklearn.cluster import DBSCAN
-        clusterer = DBSCAN(eps=0.5, min_samples=5)
+        clusterer = DBSCAN(
+            eps=kwargs.get('eps', 0.5), 
+            min_samples=kwargs.get('min_samples', 5)
+        )
+    elif algorithm == 'gaussian_mixture':
+        from sklearn.mixture import GaussianMixture
+        clusterer = GaussianMixture(
+            n_components=n_clusters,
+            random_state=random_state,
+            covariance_type=kwargs.get('covariance_type', 'full')
+        )
     else:
         raise ValueError(f"Nieznany algorytm: {algorithm}")
     
@@ -106,15 +126,48 @@ def cluster_latent_space(latent_vectors: np.ndarray,
     metrics = {}
     
     if len(set(labels)) > 1:  # Sprawdź czy są różne klastry
-        metrics['silhouette_score'] = silhouette_score(latent_vectors, labels)
+        # Silhouette score (tylko dla non-outlier punktów w DBSCAN)
+        if algorithm == 'dbscan':
+            mask = labels != -1
+            if np.sum(mask) > 1 and len(set(labels[mask])) > 1:
+                metrics['silhouette_score'] = silhouette_score(latent_vectors[mask], labels[mask])
+            metrics['n_noise_points'] = np.sum(labels == -1)
+        else:
+            metrics['silhouette_score'] = silhouette_score(latent_vectors, labels)
+        
         metrics['n_clusters_found'] = len(set(labels))
         
-        if algorithm == 'dbscan':
-            metrics['n_noise_points'] = np.sum(labels == -1)
+        # Davies-Bouldin Index (niższa = lepsza)
+        if algorithm != 'dbscan' or np.sum(labels != -1) > 0:
+            from sklearn.metrics import davies_bouldin_score
+            try:
+                if algorithm == 'dbscan':
+                    mask = labels != -1
+                    metrics['davies_bouldin'] = davies_bouldin_score(latent_vectors[mask], labels[mask])
+                else:
+                    metrics['davies_bouldin'] = davies_bouldin_score(latent_vectors, labels)
+            except:
+                pass
+        
+        # Calinski-Harabasz Index (wyższa = lepsza)
+        from sklearn.metrics import calinski_harabasz_score
+        try:
+            if algorithm == 'dbscan':
+                mask = labels != -1
+                if len(set(labels[mask])) > 1:
+                    metrics['calinski_harabasz'] = calinski_harabasz_score(latent_vectors[mask], labels[mask])
+            else:
+                metrics['calinski_harabasz'] = calinski_harabasz_score(latent_vectors, labels)
+        except:
+            pass
     
     print(f"📊 Znaleziono {len(set(labels))} klastrów")
     if 'silhouette_score' in metrics:
         print(f"📈 Silhouette score: {metrics['silhouette_score']:.4f}")
+    if 'davies_bouldin' in metrics:
+        print(f"📉 Davies-Bouldin: {metrics['davies_bouldin']:.4f}")
+    if 'calinski_harabasz' in metrics:
+        print(f"📊 Calinski-Harabasz: {metrics['calinski_harabasz']:.2f}")
     
     return labels, metrics
 
