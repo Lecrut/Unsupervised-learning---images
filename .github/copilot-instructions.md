@@ -218,4 +218,3 @@ projekt/
 
 ---
 
-Powodzenia w realizacji projektu! 🖼️🤖
