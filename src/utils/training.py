@@ -4,9 +4,13 @@ Funkcje do trenowania modeli autoencoderów.
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from typing import Optional, List, Tuple
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
+from typing import Optional, List, Tuple, Dict
 import time
+import numpy as np
+from .metrics import calculate_ssim, calculate_psnr
 
 
 def train_autoencoder(model: nn.Module,
@@ -144,7 +148,8 @@ def train_autoencoder(model: nn.Module,
 def validate_autoencoder(model: nn.Module,
                         val_loader: DataLoader,
                         criterion: nn.Module,
-                        device: torch.device) -> Tuple[float, dict]:
+                        device: torch.device,
+                        max_batches: Optional[int] = None) -> Tuple[float, dict]:
     """
     Waliduje model autoencodera na danych walidacyjnych.
     
@@ -159,23 +164,40 @@ def validate_autoencoder(model: nn.Module,
     """
     model.eval()
     total_loss = 0.0
+    total_psnr = 0.0
+    total_ssim = 0.0
     num_batches = 0
     
     with torch.no_grad():
-        for masked_imgs, target_imgs in val_loader:
+        for batch_idx, (masked_imgs, target_imgs) in enumerate(val_loader):
+            if max_batches and batch_idx >= max_batches:
+                break
+                
             masked_imgs = masked_imgs.to(device)
             target_imgs = target_imgs.to(device)
             
+            # Forward pass bez mixed precision
             outputs, _ = model(masked_imgs)
             loss = criterion(outputs, target_imgs)
             
+            # Oblicz metryki jakości
+            psnr = calculate_psnr(outputs, target_imgs)
+            ssim = calculate_ssim(outputs, target_imgs)
+            
             total_loss += loss.item()
+            total_psnr += psnr
+            total_ssim += ssim
             num_batches += 1
     
+    # Średnie wartości
     avg_loss = total_loss / num_batches
+    avg_psnr = total_psnr / num_batches
+    avg_ssim = total_ssim / num_batches
     
     metrics = {
         'validation_loss': avg_loss,
+        'psnr': avg_psnr,
+        'ssim': avg_ssim,
         'num_batches': num_batches
     }
     
@@ -188,10 +210,15 @@ def train_with_validation(model: nn.Module,
                          criterion: nn.Module,
                          optimizer: torch.optim.Optimizer,
                          device: torch.device,
-                         epochs: int = 10,
+                         epochs: int = 100,  # Zwiększona liczba epok
                          experiment = None,
-                         patience: int = 5,
-                         min_delta: float = 1e-4) -> dict:
+                         patience: int = 15,  # Zwiększona cierpliwość
+                         min_delta: float = 1e-4,
+                         scheduler_type: str = 'cosine',  # Typ schedulera
+                         grad_clip: float = 1.0,  # Clipping gradientów
+                         mixup_alpha: float = 0.2,  # Parametr mixup augmentacji
+                         calculate_ssim: bool = False  # Czy obliczać SSIM podczas treningu
+                         ) -> Dict[str, any]:
     """
     Trenuje model z walidacją i early stoppingiem.
     
@@ -202,53 +229,138 @@ def train_with_validation(model: nn.Module,
     Returns:
         Słownik z historią trenowania
     """
+    # Inicjalizacja metryk i schedulera
     train_losses = []
     val_losses = []
+    train_psnr = []
+    val_psnr = []
+    train_ssim = []
+    val_ssim = []
     best_val_loss = float('inf')
     patience_counter = 0
     best_model_state = None
     
+    # Inicjalizacja schedulera
+    if scheduler_type == 'plateau':
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    else:  # cosine
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    
     print(f"🎯 Trenowanie z walidacją i early stopping (patience={patience})")
+    print(f"📋 Scheduler: {scheduler_type}, Grad Clip: {grad_clip}, Mixup: {mixup_alpha}")
+    
+    def mixup_data(x, y, alpha=0.2):
+        """Wykonuje mixup augmentację na batch'u"""
+        if alpha > 0:
+            lam = np.random.beta(alpha, alpha)
+        else:
+            lam = 1
+
+        batch_size = x.size(0)
+        index = torch.randperm(batch_size).to(x.device)
+
+        mixed_x = lam * x + (1 - lam) * x[index]
+        mixed_y = lam * y + (1 - lam) * y[index]
+        return mixed_x, mixed_y
     
     for epoch in range(epochs):
         # Trenowanie
         model.train()
         train_loss = 0.0
+        batch_psnr = []
+        batch_ssim = []
+        
         for masked_imgs, target_imgs in train_loader:
-            masked_imgs, target_imgs = masked_imgs.to(device), target_imgs.to(device)
+            masked_imgs = masked_imgs.to(device)
+            target_imgs = target_imgs.to(device)
+            
+            # Mixup augmentacja
+            if mixup_alpha > 0:
+                masked_imgs, target_imgs = mixup_data(masked_imgs, target_imgs, mixup_alpha)
             
             optimizer.zero_grad()
+            
+            # Forward pass bez mixed precision
             outputs, _ = model(masked_imgs)
             loss = criterion(outputs, target_imgs)
+            
+            # Backward pass
             loss.backward()
+            
+            # Gradient clipping
+            if grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            
             optimizer.step()
             
             train_loss += loss.item()
-        
-        train_loss /= len(train_loader)
-        train_losses.append(train_loss)
-        
-        # Walidacja
-        val_loss, _ = validate_autoencoder(model, val_loader, criterion, device)
+            
+            # Oblicz tylko PSNR podczas treningu (SSIM wymaga float32)
+            with torch.no_grad():
+                batch_psnr.append(calculate_psnr(outputs, target_imgs))
+            
+            train_loss /= len(train_loader)
+            train_losses.append(train_loss)
+            train_psnr.append(np.mean(batch_psnr))
+            train_ssim.append(0.0)  # Tymczasowo wyłączone        # Walidacja
+        val_loss, val_metrics = validate_autoencoder(model, val_loader, criterion, device)
         val_losses.append(val_loss)
+        val_psnr.append(val_metrics['psnr'])
+        val_ssim.append(val_metrics['ssim'])
         
-        # Early stopping
-        if val_loss < best_val_loss - min_delta:
-            best_val_loss = val_loss
+        # Aktualizacja schedulera
+        if scheduler_type == 'plateau':
+            scheduler.step(val_loss)
+        else:
+            scheduler.step()
+        
+        # Early stopping z uwzględnieniem SSIM
+        current_metric = val_loss - val_metrics['ssim']  # Kombinowana metryka
+        if current_metric < best_val_loss - min_delta:
+            best_val_loss = current_metric
             patience_counter = 0
             best_model_state = model.state_dict().copy()
-            print(f"✨ Epoka {epoch+1}: Nowy najlepszy wynik! Val Loss: {val_loss:.4f}")
+            print(f"✨ Epoka {epoch+1}: Nowy najlepszy wynik!")
+            print(f"   Val Loss: {val_loss:.4f}, SSIM: {val_metrics['ssim']:.4f}, PSNR: {val_metrics['psnr']:.2f} dB")
         else:
             patience_counter += 1
             
-        print(f"📊 Epoka {epoch+1}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        # Wyświetl postęp
+        print(f"📊 Epoka {epoch+1}:")
+        print(f"   Train - Loss: {train_loss:.4f}, PSNR: {train_psnr[-1]:.2f} dB, SSIM: {train_ssim[-1]:.4f}")
+        print(f"   Val   - Loss: {val_loss:.4f}, PSNR: {val_metrics['psnr']:.2f} dB, SSIM: {val_metrics['ssim']:.4f}")
+        print(f"   LR: {optimizer.param_groups[0]['lr']:.2e}")
         
+        # Logowanie do experiment trackera
         if experiment:
-            experiment.log_metric("train_loss", train_loss, step=epoch)
-            experiment.log_metric("val_loss", val_loss, step=epoch)
+            metrics = {
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "train_psnr": train_psnr[-1],
+                "val_psnr": val_metrics['psnr'],
+                "train_ssim": train_ssim[-1],
+                "val_ssim": val_metrics['ssim'],
+                "learning_rate": optimizer.param_groups[0]['lr']
+            }
+            experiment.log_metrics(metrics, step=epoch)
+            
+            # Log sample images
+            if epoch % 5 == 0:
+                with torch.no_grad():
+                    sample_outputs = outputs[:4].cpu()
+                    sample_targets = target_imgs[:4].cpu()
+                    for i in range(4):
+                        experiment.log_image(
+                            sample_outputs[i].permute(1,2,0).numpy(),
+                            name=f"epoch_{epoch}_sample_{i}_output"
+                        )
+                        experiment.log_image(
+                            sample_targets[i].permute(1,2,0).numpy(),
+                            name=f"epoch_{epoch}_sample_{i}_target"
+                        )
         
         if patience_counter >= patience:
-            print(f"🛑 Early stopping po {epoch+1} epokach (patience={patience})")
+            print(f"🛑 Early stopping po {epoch+1} epokach")
             break
     
     # Przywróć najlepszy model
@@ -256,9 +368,23 @@ def train_with_validation(model: nn.Module,
         model.load_state_dict(best_model_state)
         print(f"🔄 Przywrócono najlepszy model (Val Loss: {best_val_loss:.4f})")
     
+    # Przywróć najlepszy model i zbierz finalne metryki
+    if best_model_state:
+        model.load_state_dict(best_model_state)
+        _, final_metrics = validate_autoencoder(model, val_loader, criterion, device)
+        print("\n🏁 Finalne metryki po przywróceniu najlepszego modelu:")
+        print(f"   PSNR: {final_metrics['psnr']:.2f} dB")
+        print(f"   SSIM: {final_metrics['ssim']:.4f}")
+        print(f"   Loss: {final_metrics['validation_loss']:.4f}")
+    
     return {
         'train_losses': train_losses,
         'val_losses': val_losses,
+        'train_psnr': train_psnr,
+        'val_psnr': val_psnr,
+        'train_ssim': train_ssim,
+        'val_ssim': val_ssim,
         'best_val_loss': best_val_loss,
+        'final_metrics': final_metrics if best_model_state else None,
         'epochs_trained': len(train_losses)
     }

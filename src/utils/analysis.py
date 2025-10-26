@@ -48,10 +48,16 @@ def extract_latent_vectors(model: torch.nn.Module,
             imgs = imgs.to(device)
             
             # Ekstraktuj reprezentację latentną
-            if hasattr(model, 'encode'):
-                z = model.encode(imgs)
+            if hasattr(model, 'get_latent_representation'):
+                z, _ = model.get_latent_representation(imgs)
+            elif hasattr(model, 'encode'):
+                z, _ = model.encode(imgs)  # ignore encoder features
             else:
-                _, z = model(imgs)  # Zakładamy że model zwraca (output, latent)
+                output_tuple = model(imgs)  # Zakładamy że model zwraca (output, latent)
+                if isinstance(output_tuple, tuple):
+                    _, z = output_tuple
+                else:
+                    z = output_tuple
             
             latent_vectors.append(z.cpu().numpy())
             samples_processed += imgs.size(0)

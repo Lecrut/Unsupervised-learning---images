@@ -60,11 +60,15 @@ def calculate_ssim(img1: torch.Tensor,
     Returns:
         SSIM score
     """
-    # Upewnij się że mamy 4D tensor
+    # Upewnij się że mamy 4D tensor i odpowiedni typ
     if img1.dim() == 3:
         img1 = img1.unsqueeze(0)
     if img2.dim() == 3:
         img2 = img2.unsqueeze(0)
+    
+    # Konwersja do float32
+    img1 = img1.float()
+    img2 = img2.float()
     
     ssim_val = ssim(img1, img2, data_range=data_range, size_average=size_average)
     return ssim_val.item()
@@ -321,35 +325,68 @@ class CombinedLoss(torch.nn.Module):
     """
     
     def __init__(self, 
-                 mse_weight=1.0,
-                 ssim_weight=1.0,
-                 perceptual_weight=0.1,
-                 use_perceptual=False):
+                 mse_weight=0.3,    # Zmniejszony wkład MSE
+                 ssim_weight=1.0,   # SSIM jako główna metryka
+                 perceptual_weight=0.4,  # Zwiększony wkład perceptual loss
+                 edge_weight=0.3,   # Nowa waga dla edge loss
+                 use_perceptual=True):  # Domyślnie włączony perceptual loss
         super().__init__()
         self.mse_weight = mse_weight
         self.ssim_weight = ssim_weight
         self.perceptual_weight = perceptual_weight
+        self.edge_weight = edge_weight
         self.use_perceptual = use_perceptual
         
         if use_perceptual:
             self.perceptual = PerceptualLoss()
+            
+        # Kernel do detekcji krawędzi
+        self.register_buffer('edge_kernel', torch.tensor([
+            [-1, -1, -1],
+            [-1,  8, -1],
+            [-1, -1, -1]
+        ]).unsqueeze(0).unsqueeze(0).float())
+        
+    def detect_edges(self, x):
+        """Wykrywa krawędzie w obrazie używając filtru Laplace'a"""
+        b, c, h, w = x.shape
+        edges = []
+        for i in range(c):
+            channel = x[:, i:i+1]
+            edge = F.conv2d(channel, self.edge_kernel, padding=1)
+            edges.append(edge)
+        return torch.cat(edges, dim=1)
         
     def forward(self, pred, target):
         """
-        Oblicza kombinowaną stratę.
+        Oblicza kombinowaną stratę z większym naciskiem na szczegóły i krawędzie
         """
-        # MSE Loss
+        # Normalizacja do [-1,1] dla lepszej stabilności
+        pred = 2 * pred - 1
+        target = 2 * target - 1
+        
+        # MSE Loss na znormalizowanych danych
         mse_loss = F.mse_loss(pred, target)
         
-        # SSIM Loss (1 - SSIM, bo chcemy minimalizować)
-        ssim_loss = 1 - ssim(pred, target, data_range=1.0, size_average=True)
+        # SSIM Loss
+        ssim_loss = 1 - ssim(pred, target, data_range=2.0, size_average=True)
+        
+        # Edge Loss - zachowanie krawędzi
+        pred_edges = self.detect_edges(pred)
+        target_edges = self.detect_edges(target)
+        edge_loss = F.l1_loss(pred_edges, target_edges)
         
         # Łączna strata
-        total_loss = self.mse_weight * mse_loss + self.ssim_weight * ssim_loss
+        total_loss = (self.mse_weight * mse_loss + 
+                     self.ssim_weight * ssim_loss +
+                     self.edge_weight * edge_loss)
         
-        # Perceptual loss (opcjonalnie)
+        # Perceptual loss
         if self.use_perceptual:
-            perceptual_loss = self.perceptual(pred, target)
+            # Denormalizacja do [0,1] dla VGG
+            pred_vgg = (pred + 1) / 2
+            target_vgg = (target + 1) / 2
+            perceptual_loss = self.perceptual(pred_vgg, target_vgg)
             total_loss += self.perceptual_weight * perceptual_loss
         
         return total_loss
