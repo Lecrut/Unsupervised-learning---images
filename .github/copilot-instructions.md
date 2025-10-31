@@ -12,59 +12,111 @@ Celem projektu jest stworzenie kompletnego systemu przetwarzania obrazów dzieł
 
 ---
 
+# Architektura DeepCluster-like (3 etapy)
+
+---
+
+## Etap I — Uczenie Enkodera (`EMC`)
+
+### `IMG`
+- **Wejście:** obraz oryginalny `img`
+- **Wyjście:** tensor obrazu
+
+### `DMG` (Data Modification Generator)
+- **Wejście:** `img`
+- **Wyjście:** `img_d` – zniekształcony obraz
+
+### `EMC` (Encoder Module)
+- **Wejście:**
+  - `img`
+  - `img_d`
+- **Wyjście:**
+  - `LaSp` – reprezentacja latentna oryginalnego obrazu
+  - `LaSp_d` – reprezentacja latentna obrazu zniekształconego
+- **Cel etapu:**
+  Nauczyć enkoder ekstrakcji stabilnych cech wizualnych.
+- **Straty:**
+  - `L(img, img′)` – rekonstrukcja oryginału
+  - `L(img_d, img_d′)` – rekonstrukcja zniekształcenia
+  - `L(LaSp, LaSp_d)` – spójność cech między widokami (contrastive loss)
+
+---
+
+## Etap II — Klasteryzacja i redukcja wymiarowości (`PCA` + `ClusA`)
+
+### `PCA`
+- **Wejście:**
+  - `LaSp`
+  - `LaSp_d`
+- **Wyjście:**
+  - `PCA(LaSp)`
+  - `PCA(LaSp_d)`
+- **Opis:** redukuje wymiarowość obu przestrzeni latentnych w celu stabilnej klasteryzacji.
+
+### `ClusA` (Cluster Assignment)
+- **Wejście:**
+  - `PCA(LaSp)`
+  - `PCA(LaSp_d)`
+- **Wyjście:**
+  - `K` – przypisania klastrowe / pseudo-etykiety dla obu zestawów cech
+- **Cel etapu:**
+  Grupowanie podobnych reprezentacji i generowanie pseudo-etykiet (zgodnie z ideą DeepCluster).
+
+---
+
+## Etap III — IMPainting i dekodowanie (`IMP` + `DEC`)
+
+### `IMP` (IMPainter)
+- **Wejście:**
+  - `LaSp_d`
+  - wynik klasteryzacji `K` (z `ClusA`)
+- **Wyjście:**
+  - `LaSp_fixed` – poprawiona (uzupełniona / inpaintowana) reprezentacja latentna
+- **Opis:** moduł odtwarzający brakujące lub zniekształcone fragmenty reprezentacji w przestrzeni latentnej. Może działać jak denoising autoencoder lub inpainting w latent space.
+
+### `DEC` (Decoder)
+- **Wejście:**
+  - `LaSp`
+  - `LaSp_d`
+  - `LaSp_fixed`
+- **Wyjście:**
+  - `img′` – rekonstrukcja z `LaSp`
+  - `img_d′` – rekonstrukcja z `LaSp_d`
+  - `img_fixed′` – rekonstrukcja z `LaSp_fixed`
+- **Cel etapu:**
+  Odzyskać obrazy z przestrzeni latentnej i ocenić jakość reprezentacji po inpaintingu.
+
+---
+
+## Funkcje straty (łączne)
+```
+L_total = α·L(img, img′)
+         + β·L(img_d, img_d′)
+         + γ·L(LaSp, LaSp_d)
+         + δ·L(img_fixed′, img)
+```
+
+Gdzie:
+- `α, β, γ, δ` — współczynniki wagowe,
+- `L(LaSp, LaSp_d)` — utrzymuje spójność między oryginałem i zniekształceniem,
+- `L(img_fixed′, img)` — mierzy jakość odtworzenia po naprawie przez IMPainter.
+
+---
+
 ## Schemat przepływu danych
-
 ```
-                         ┌──────────────────────────┐
-                         │     Obraz nieuszkodzony  │
-                         └─────────────┬────────────┘
-                                       │
-               ┌───────────────────────┼────────────────────────┐
-               │                                                │
-               ▼                                                ▼
-     ┌──────────────────────┐                       ┌──────────────────────┐
-     │       Encoder         │                       │     Generator        │
-     │ (reprezentacja obrazu)│                       │     uszkodzeń        │
-     └─────────────┬─────────┘                       └─────────────┬────────┘
-                   │                                               │
-                   ▼                                               ▼
-     ┌──────────────────────┐                        ┌──────────────────────┐
-     │ Reprezentacja latentna│                       │    Obraz uszkodzony  │
-     └─────────────┬─────────┘                       └─────────┬────────────┘
-                   │                                           │
-                   ▼                                           │
-     ┌──────────────────────┐                                  │
-     │     Klasteryzacja     │                                 │
-     └─────────────┬─────────┘                                 │
-                   ▼                                           │
-             ┌──────────────┐                                  │
-             │    Klastry    │<──────────────┐                 │
-             └──────────────┘               │                  │
-                                            ▼                  ▼
-                                 ┌──────────────────────────────┐
-                                 │        Inpainting             │
-                                 │ (klastry + obraz uszkodzony) │
-                                 └──────────────┬───────────────┘
-                                                ▼
-                                      ┌──────────────────┐
-                                      │     Dekoder      │
-                                      └────────┬─────────┘
-                                               ▼
-                                  ┌───────────────────────────┐
-                                  │  Obraz zrekonstruowany   │
-                                  └───────────┬──────────────┘
-                                              ▼
-                               ┌─────────────────────────────────┐
-                               │     [Super-Resolution model]    │
-                               │ (poprawa jakości / rozdzielczości) │
-                               └─────────────────┬─────────────────┘
-                                                 ▼
-                                   ┌──────────────────────────────┐
-                                   │  Obraz końcowy wysokiej jakości │
-                                   └──────────────────────────────┘
+Etap I:
+img ──► EMC ──► LaSp
+img ──► DMG ──► img_d ──► EMC ──► LaSp_d
 
+Etap II:
+LaSp, LaSp_d ──► PCA ──► PCA(LaSp), PCA(LaSp_d)
+                └────► ClusA ──► K
+
+Etap III:
+LaSp_d, K ──► IMP ──► LaSp_fixed
+LaSp, LaSp_d, LaSp_fixed ──► DEC ──► img′, img_d′, img_fixed′
 ```
-
 ---
 
 ## Zakres projektu
