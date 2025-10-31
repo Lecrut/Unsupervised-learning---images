@@ -222,7 +222,6 @@ projekt/
 │   │   ├── decoder.py             
 │   │   ├── clustering.py          
 │   │   ├── inpainting_model.py    
-│   │   └── superres_model.py      
 │   └── utils/
 │       ├── training.py            
 │       ├── analysis.py            
@@ -260,13 +259,18 @@ projekt/
 
 ## Dobre praktyki i zasady kodowania
 
-- Kod powinien być **czysty, spójny i czytelny**, zgodny z zasadami PEP8.  
-- **Nie dodawaj zbędnych komentarzy** kopiowanych z dokumentacji — komentarze mają objaśniać logikę.  
+- Kod powinien być **czysty, spójny i czytelny**.  
+- **Nie dodawaj zbędnych komentarzy** kopiowanych z dokumentacji — komentarze mają objaśniać niejasną logikę.  
 - **Nazwy funkcji i klas** powinny jednoznacznie określać ich działanie (np. `generate_damage_mask`, `train_autoencoder`, `visualize_clusters`).  
 - **Nie twórz dodatkowych plików podsumowujących** (np. `Updates.md`, `Summary.txt`) – cała dokumentacja powinna znajdować się w `README.md` i `main.ipynb`.  
 - Każda funkcja powinna mieć jedną, dobrze zdefiniowaną odpowiedzialność.  
+- Każdą funkcjonalność i etap zapisz jako osobną klasę w src. np. `EncoderModel`, `ClusteringModel`, `InpaintingModel`, `SuperResolutionModel`, `CometModel`.
 - Loguj eksperymenty w Comet ML i lokalnie w `local_logs/`.  
 - Zadbaj o czytelne wizualizacje i opisy osi w wykresach.  
+- W komentarzach nie dodawaj ikonek ani zbędnych ozdobników.
+- Staraj się pisać kod w sposób zwięzły i unikać nadmiarowości.
+- Kod ma wyglądać jak napisany ręcznie, a nie wygenerowany przez AI.
+- Usuwaj nieużywane importy, fragmenty kodu i pliki.
 
 ---
 
