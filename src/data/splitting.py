@@ -44,10 +44,10 @@ def split_dataset(dataset: Dataset,
         generator=torch.Generator().manual_seed(random_seed)
     )
     
-    print(f"📊 Podział datasetu:")
-    print(f"  🏋️ Train: {len(train_dataset)} ({train_ratio*100:.0f}%)")
-    print(f"  ✅ Val:   {len(val_dataset)} ({val_ratio*100:.0f}%)")
-    print(f"  🧪 Test:  {len(test_dataset)} ({test_ratio*100:.0f}%)")
+    print(f"Podział datasetu:")
+    print(f"  Train: {len(train_dataset)} ({train_ratio*100:.0f}%)")
+    print(f"  Val:   {len(val_dataset)} ({val_ratio*100:.0f}%)")
+    print(f"  Test:  {len(test_dataset)} ({test_ratio*100:.0f}%)")
     
     return train_dataset, val_dataset, test_dataset
 
@@ -104,10 +104,10 @@ def stratified_split(dataset: Dataset,
     val_dataset = Subset(dataset, val_indices)
     test_dataset = Subset(dataset, test_indices)
     
-    print(f"📊 Stratified split:")
-    print(f"  🏋️ Train: {len(train_dataset)} próbek")
-    print(f"  ✅ Val:   {len(val_dataset)} próbek")
-    print(f"  🧪 Test:  {len(test_dataset)} próbek")
+    print(f"Stratified split:")
+    print(f"  Train: {len(train_dataset)} próbek")
+    print(f"  Val:   {len(val_dataset)} próbek")
+    print(f"  Test:  {len(test_dataset)} próbek")
     
     # Sprawdź czy proporcje klas są zachowane
     _verify_stratification(labels, train_indices, val_indices, test_indices)
@@ -171,10 +171,10 @@ def temporal_split(dataset: Dataset,
     val_dataset = Subset(dataset, val_indices)
     test_dataset = Subset(dataset, test_indices)
     
-    print(f"📊 Temporal split (chronologiczny):")
-    print(f"  🏋️ Train: {len(train_dataset)} (najstarsze)")
-    print(f"  ✅ Val:   {len(val_dataset)}")
-    print(f"  🧪 Test:  {len(test_dataset)} (najnowsze)")
+    print(f"Temporal split (chronologiczny):")
+    print(f"  Train: {len(train_dataset)} (najstarsze)")
+    print(f"  Val:   {len(val_dataset)}")
+    print(f"  Test:  {len(test_dataset)} (najnowsze)")
     
     return train_dataset, val_dataset, test_dataset
 
@@ -206,7 +206,7 @@ class CrossValidationSplitter:
             val_dataset = Subset(dataset, val_idx)
             folds.append((train_dataset, val_dataset))
             
-            print(f"📁 Fold {fold_idx + 1}/{self.n_splits}: "
+            print(f"Fold {fold_idx + 1}/{self.n_splits}: "
                   f"Train={len(train_dataset)}, Val={len(val_dataset)}")
         
         return folds
@@ -231,7 +231,7 @@ def create_subset_by_class(dataset: Dataset,
     indices = [i for i, label in enumerate(labels) if label in selected_classes]
     subset = Subset(dataset, indices)
     
-    print(f"🎨 Utworzono subset z klasami {selected_classes}")
+    print(f"Utworzono subset z klasami {selected_classes}")
     print(f"  Liczba próbek: {len(subset)}")
     
     return subset
@@ -266,7 +266,7 @@ def balance_dataset(dataset: Dataset,
             selected = np.random.choice(label_indices, min_count, replace=False)
             balanced_indices.extend(selected)
         
-        print(f"⚖️ Undersample: {len(balanced_indices)} próbek "
+        print(f"Undersample: {len(balanced_indices)} próbek "
               f"(po {min_count} z każdej klasy)")
         
     elif strategy == 'oversample':
@@ -280,7 +280,7 @@ def balance_dataset(dataset: Dataset,
             selected = np.random.choice(label_indices, max_count, replace=True)
             balanced_indices.extend(selected)
         
-        print(f"⚖️ Oversample: {len(balanced_indices)} próbek "
+        print(f"Oversample: {len(balanced_indices)} próbek "
               f"(po {max_count} z każdej klasy)")
     else:
         raise ValueError(f"Unknown strategy: {strategy}")

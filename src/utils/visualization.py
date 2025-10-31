@@ -92,7 +92,7 @@ def visualize_reconstructions(model: torch.nn.Module,
             
             if save_path:
                 plt.savefig(save_path, dpi=150, bbox_inches='tight')
-                print(f"💾 Zapisano wizualizację: {save_path}")
+                print(f"Zapisano wizualizację: {save_path}")
             
             plt.show()
             break  # Tylko pierwszy batch
@@ -139,7 +139,7 @@ def plot_training_history(losses: List[float],
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"💾 Zapisano wykres strat: {save_path}")
+        print(f"Zapisano wykres strat: {save_path}")
     
     plt.show()
 
@@ -179,7 +179,7 @@ def visualize_latent_space_2d(embedding: np.ndarray,
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"💾 Zapisano wizualizację 2D: {save_path}")
+        print(f"Zapisano wizualizację 2D: {save_path}")
     
     plt.tight_layout()
     plt.show()

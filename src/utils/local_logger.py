@@ -28,7 +28,7 @@ class LocalLogger:
         self.parameters = {}
         self.step_data = []
         
-        print(f"📁 Lokalne logowanie w: {self.experiment_dir}")
+        print(f"Lokalne logowanie w: {self.experiment_dir}")
     
     def log_parameters(self, params: Dict[str, Any]):
         """Loguje parametry eksperymentu"""
@@ -39,7 +39,7 @@ class LocalLogger:
         with open(params_file, 'w') as f:
             json.dump(self.parameters, f, indent=2, default=str)
         
-        print("📋 Parametry zapisane lokalnie:")
+        print("Parametry zapisane lokalnie:")
         for key, value in params.items():
             print(f"  {key}: {value}")
     
@@ -74,7 +74,7 @@ class LocalLogger:
         
         figure_path = self.experiment_dir / f"{name}.png"
         figure.savefig(figure_path, dpi=150, bbox_inches='tight')
-        print(f"🖼️  Wykres zapisany: {figure_path}")
+        print(f"Wykres zapisany: {figure_path}")
     
     def log_image(self, image_array, name: str):
         """Zapisuje obraz z numpy array"""
@@ -94,7 +94,7 @@ class LocalLogger:
             plt.savefig(image_path, dpi=150, bbox_inches='tight')
             plt.close()
         
-        print(f"🖼️  Obraz zapisany: {image_path}")
+        print(f"Obraz zapisany: {image_path}")
     
     def save_summary(self):
         """Zapisuje podsumowanie eksperymentu"""
@@ -126,13 +126,13 @@ class LocalLogger:
         with open(metrics_file, 'w') as f:
             json.dump(self.metrics, f, indent=2, default=str)
         
-        print(f"📊 Podsumowanie zapisane: {summary_file}")
+        print(f"Podsumowanie zapisane: {summary_file}")
         return summary
     
     def plot_metrics(self):
         """Tworzy wykresy wszystkich metryk"""
         if not self.metrics:
-            print("📈 Brak metryk do wykreślenia")
+            print("Brak metryk do wykreślenia")
             return
         
         n_metrics = len(self.metrics)
@@ -168,7 +168,7 @@ class LocalLogger:
         # Zapisz wykres
         metrics_plot_path = self.experiment_dir / "metrics_plot.png"
         plt.savefig(metrics_plot_path, dpi=150, bbox_inches='tight')
-        print(f"📈 Wykres metryk zapisany: {metrics_plot_path}")
+        print(f"Wykres metryk zapisany: {metrics_plot_path}")
         
         plt.show()
     
@@ -177,8 +177,8 @@ class LocalLogger:
         summary = self.save_summary()
         self.plot_metrics()
         
-        print(f"\n🎯 Eksperyment zakończony!")
-        print(f"📁 Wszystkie pliki w: {self.experiment_dir}")
-        print(f"📊 Zalogowane metryki: {list(self.metrics.keys())}")
+        print(f"\nEksperyment zakończony!")
+        print(f"Wszystkie pliki w: {self.experiment_dir}")
+        print(f"Zalogowane metryki: {list(self.metrics.keys())}")
         
         return summary

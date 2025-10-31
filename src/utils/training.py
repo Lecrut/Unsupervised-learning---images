@@ -46,10 +46,10 @@ def train_autoencoder(model: nn.Module,
     start_time = time.time()
     
     if verbose:
-        print(f"🚀 Rozpoczynam trenowanie na {epochs} epok(ach)")
-        print(f"📱 Urządzenie: {device}")
-        print(f"📊 Rozmiar batcha: {train_loader.batch_size}")
-        print(f"🔄 Liczba batchy: {len(train_loader)}")
+        print(f"Rozpoczynam trenowanie na {epochs} epok(ach)")
+        print(f"Urządzenie: {device}")
+        print(f"Rozmiar batcha: {train_loader.batch_size}")
+        print(f"Liczba batchy: {len(train_loader)}")
         print("-" * 50)
     
     for epoch in range(epochs):
@@ -95,7 +95,7 @@ def train_autoencoder(model: nn.Module,
             experiment.log_metric("epoch_time", epoch_time, step=epoch)
             
         if verbose:
-            print(f"📈 Epoka [{epoch+1}/{epochs}] - "
+            print(f"Epoka [{epoch+1}/{epochs}] - "
                   f"Loss: {avg_loss:.4f}, "
                   f"Czas: {epoch_time:.1f}s")
 
@@ -132,15 +132,15 @@ def train_autoencoder(model: nn.Module,
             }
             torch.save(checkpoint, f"{checkpoint_path.split('.')[0]}_epoch_{epoch+1}.pth")
             if verbose:
-                print(f"💾 Checkpoint zapisany: epoch {epoch+1}")
+                print(f"Checkpoint zapisany: epoch {epoch+1}")
     
     total_time = time.time() - start_time
     if verbose:
         print("-" * 50)
-        print(f"✅ Trenowanie zakończone!")
-        print(f"⏱️  Całkowity czas: {total_time:.1f}s")
-        print(f"📉 Finalna strata: {losses[-1]:.4f}")
-        print(f"📊 Najniższa strata: {min(losses):.4f} (epoka {losses.index(min(losses))+1})")
+        print(f"Trenowanie zakończone!")
+        print(f"Całkowity czas: {total_time:.1f}s")
+        print(f"Finalna strata: {losses[-1]:.4f}")
+        print(f"Najniższa strata: {min(losses):.4f} (epoka {losses.index(min(losses))+1})")
     
     return losses
 
@@ -243,11 +243,11 @@ def train_with_validation(model: nn.Module,
     # Inicjalizacja schedulera
     if scheduler_type == 'plateau':
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
-    else:  # cosine
+    else:
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     
-    print(f"🎯 Trenowanie z walidacją i early stopping (patience={patience})")
-    print(f"📋 Scheduler: {scheduler_type}, Grad Clip: {grad_clip}, Mixup: {mixup_alpha}")
+    print(f"Trenowanie z walidacją i early stopping (patience={patience})")
+    print(f"Scheduler: {scheduler_type}, Grad Clip: {grad_clip}, Mixup: {mixup_alpha}")
     
     def mixup_data(x, y, alpha=0.2):
         """Wykonuje mixup augmentację na batch'u"""
@@ -308,25 +308,22 @@ def train_with_validation(model: nn.Module,
         val_psnr.append(val_metrics['psnr'])
         val_ssim.append(val_metrics['ssim'])
         
-        # Aktualizacja schedulera
         if scheduler_type == 'plateau':
             scheduler.step(val_loss)
         else:
             scheduler.step()
         
-        # Early stopping z uwzględnieniem SSIM
-        current_metric = val_loss - val_metrics['ssim']  # Kombinowana metryka
+        current_metric = val_loss - val_metrics['ssim']
         if current_metric < best_val_loss - min_delta:
             best_val_loss = current_metric
             patience_counter = 0
             best_model_state = model.state_dict().copy()
-            print(f"✨ Epoka {epoch+1}: Nowy najlepszy wynik!")
+            print(f"Epoka {epoch+1}: Nowy najlepszy wynik!")
             print(f"   Val Loss: {val_loss:.4f}, SSIM: {val_metrics['ssim']:.4f}, PSNR: {val_metrics['psnr']:.2f} dB")
         else:
             patience_counter += 1
             
-        # Wyświetl postęp
-        print(f"📊 Epoka {epoch+1}:")
+        print(f"Epoka {epoch+1}:")
         print(f"   Train - Loss: {train_loss:.4f}, PSNR: {train_psnr[-1]:.2f} dB, SSIM: {train_ssim[-1]:.4f}")
         print(f"   Val   - Loss: {val_loss:.4f}, PSNR: {val_metrics['psnr']:.2f} dB, SSIM: {val_metrics['ssim']:.4f}")
         print(f"   LR: {optimizer.param_groups[0]['lr']:.2e}")
@@ -360,19 +357,17 @@ def train_with_validation(model: nn.Module,
                         )
         
         if patience_counter >= patience:
-            print(f"🛑 Early stopping po {epoch+1} epokach")
+            print(f"Early stopping po {epoch+1} epokach")
             break
     
-    # Przywróć najlepszy model
     if best_model_state:
         model.load_state_dict(best_model_state)
-        print(f"🔄 Przywrócono najlepszy model (Val Loss: {best_val_loss:.4f})")
+        print(f"Przywrócono najlepszy model (Val Loss: {best_val_loss:.4f})")
     
-    # Przywróć najlepszy model i zbierz finalne metryki
     if best_model_state:
         model.load_state_dict(best_model_state)
         _, final_metrics = validate_autoencoder(model, val_loader, criterion, device)
-        print("\n🏁 Finalne metryki po przywróceniu najlepszego modelu:")
+        print("\nFinalne metryki po przywróceniu najlepszego modelu:")
         print(f"   PSNR: {final_metrics['psnr']:.2f} dB")
         print(f"   SSIM: {final_metrics['ssim']:.4f}")
         print(f"   Loss: {final_metrics['validation_loss']:.4f}")

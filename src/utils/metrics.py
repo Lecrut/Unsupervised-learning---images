@@ -160,7 +160,7 @@ def evaluate_reconstruction(model: torch.nn.Module,
     total_mae = 0.0
     num_batches = 0
     
-    print("🔍 Ewaluacja modelu...")
+    print("Ewaluacja modelu...")
     
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(dataloader):
@@ -206,7 +206,7 @@ def evaluate_reconstruction(model: torch.nn.Module,
         'mae': total_mae / num_batches
     }
     
-    print("\n📊 Wyniki ewaluacji:")
+    print("\nWyniki ewaluacji:")
     print(f"  PSNR: {metrics['psnr']:.2f} dB")
     print(f"  SSIM: {metrics['ssim']:.4f}")
     if metrics['ms_ssim'] is not None:
@@ -233,18 +233,17 @@ def compare_models(models_dict: dict,
     """
     results = {}
     
-    print(f"🔬 Porównanie {len(models_dict)} modeli...\n")
+    print(f"Porównanie {len(models_dict)} modeli...\n")
     
     for name, model in models_dict.items():
-        print(f"📈 Ewaluacja: {name}")
+        print(f"Ewaluacja: {name}")
         print("-" * 50)
         metrics = evaluate_reconstruction(model, dataloader, device, max_batches=20)
         results[name] = metrics
         print()
     
-    # Podsumowanie
     print("\n" + "=" * 70)
-    print("📊 PODSUMOWANIE PORÓWNANIA")
+    print("PODSUMOWANIE PORÓWNANIA")
     print("=" * 70)
     print(f"{'Model':<25} {'PSNR (dB)':<12} {'SSIM':<10} {'MSE':<12}")
     print("-" * 70)

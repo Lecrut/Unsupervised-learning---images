@@ -47,7 +47,7 @@ class LimitedDataset(Dataset):
                 # Pierwsze N próbek
                 self.indices = list(range(max_samples))
         
-        print(f"📊 Dataset ograniczony do {len(self.indices)} próbek "
+        print(f"Dataset ograniczony do {len(self.indices)} próbek "
               f"(z {total_samples} dostępnych)")
     
     def __len__(self):
@@ -107,7 +107,7 @@ class StratifiedLimitedDataset(Dataset):
         
         self.indices = selected_indices[:max_samples]  # Ostateczne ograniczenie
         
-        print(f"📊 Stratyfikowany dataset: {len(self.indices)} próbek "
+        print(f"Stratyfikowany dataset: {len(self.indices)} próbek "
               f"z {n_classes} klas (≤{samples_per_class} na klasę)")
     
     def __len__(self):
@@ -143,7 +143,7 @@ def create_subset_by_classes(dataset: Dataset,
                 indices.append(idx)
                 class_counts[label] += 1
     
-    print(f"📊 Wybrane klasy {target_classes}: {len(indices)} próbek")
+    print(f"Wybrane klasy {target_classes}: {len(indices)} próbek")
     for cls, count in class_counts.items():
         print(f"  Klasa {cls}: {count} próbek")
     
@@ -177,7 +177,7 @@ def sample_dataset(dataset: Dataset,
     else:
         target_size = min(sample_size, total_size)
     
-    print(f"🎯 Próbkowanie: {target_size} z {total_size} próbek ({target_size/total_size*100:.1f}%)")
+    print(f"Próbkowanie: {target_size} z {total_size} próbek ({target_size/total_size*100:.1f}%)")
     
     if method == 'random':
         return LimitedDataset(dataset, target_size, random_sample=True, random_seed=random_seed)

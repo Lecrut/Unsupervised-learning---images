@@ -32,7 +32,7 @@ def extract_latent_vectors(model: torch.nn.Module,
     latent_vectors = []
     samples_processed = 0
     
-    print(f"🔍 Ekstraktowanie wektorów latentnych...")
+    print(f"Ekstraktowanie wektorów latentnych...")
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(dataloader):
@@ -70,7 +70,7 @@ def extract_latent_vectors(model: torch.nn.Module,
     if max_samples:
         latent_array = latent_array[:max_samples]
     
-    print(f"✅ Wyekstraktowano {latent_array.shape[0]} wektorów latentnych "
+    print(f"Wyekstraktowano {latent_array.shape[0]} wektorów latentnych "
           f"o wymiarze {latent_array.shape[1]}")
     
     return latent_array
@@ -94,7 +94,7 @@ def cluster_latent_space(latent_vectors: np.ndarray,
     Returns:
         Tuple: (etykiety_klastrów, słownik_z_metrykami)
     """
-    print(f"🧠 Klasteryzacja {algorithm.upper()} na {n_clusters} klastrów...")
+    print(f"Klasteryzacja {algorithm.upper()} na {n_clusters} klastrów...")
     
     if algorithm == 'kmeans':
         from sklearn.cluster import KMeans
@@ -167,13 +167,13 @@ def cluster_latent_space(latent_vectors: np.ndarray,
         except:
             pass
     
-    print(f"📊 Znaleziono {len(set(labels))} klastrów")
+    print(f"Znaleziono {len(set(labels))} klastrów")
     if 'silhouette_score' in metrics:
-        print(f"📈 Silhouette score: {metrics['silhouette_score']:.4f}")
+        print(f"Silhouette score: {metrics['silhouette_score']:.4f}")
     if 'davies_bouldin' in metrics:
-        print(f"📉 Davies-Bouldin: {metrics['davies_bouldin']:.4f}")
+        print(f"Davies-Bouldin: {metrics['davies_bouldin']:.4f}")
     if 'calinski_harabasz' in metrics:
-        print(f"📊 Calinski-Harabasz: {metrics['calinski_harabasz']:.2f}")
+        print(f"Calinski-Harabasz: {metrics['calinski_harabasz']:.2f}")
     
     return labels, metrics
 
@@ -194,7 +194,7 @@ def reduce_dimensionality(latent_vectors: np.ndarray,
     Returns:
         Array z zredukowanymi wymiarami
     """
-    print(f"📉 Redukcja wymiarowości metodą {method.upper()} do {n_components}D...")
+    print(f"Redukcja wymiarowości metodą {method.upper()} do {n_components}D...")
     
     if method == 'umap':
         import umap
@@ -218,7 +218,7 @@ def reduce_dimensionality(latent_vectors: np.ndarray,
         raise ValueError(f"Nieznana metoda: {method}")
     
     embedding = reducer.fit_transform(latent_vectors)
-    print(f"✅ Zredukowano z {latent_vectors.shape[1]}D do {embedding.shape[1]}D")
+    print(f"Zredukowano z {latent_vectors.shape[1]}D do {embedding.shape[1]}D")
     
     return embedding
 
@@ -290,7 +290,7 @@ def cluster_and_visualize(latent_vectors: np.ndarray,
     plt.show()
     
     # Analiza klastrów
-    print("\n📊 Analiza klastrów:")
+    print("\nAnaliza klastrów:")
     unique_labels, counts = np.unique(cluster_labels, return_counts=True)
     for label, count in zip(unique_labels, counts):
         percentage = count / len(cluster_labels) * 100
