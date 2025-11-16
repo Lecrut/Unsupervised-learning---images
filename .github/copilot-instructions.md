@@ -271,6 +271,6 @@ projekt/
 - Staraj się pisać kod w sposób zwięzły i unikać nadmiarowości.
 - Kod ma wyglądać jak napisany ręcznie, a nie wygenerowany przez AI.
 - Usuwaj nieużywane importy, fragmenty kodu i pliki.
-
+- **NIE KORZYSTAJ Z IKONEK EMOJI W KOMENTARZACH, PRINTACH ANI W NAZWACH PLIKÓW.**
 ---
 

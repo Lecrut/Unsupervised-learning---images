@@ -1,36 +1,47 @@
 """
-Funkcje pomocnicze do trenowania, wizualizacji i analizy
+DeepCluster Architecture - Utilities
+Funkcje pomocnicze zgodne z wymaganiami projektu
 """
 
-from .training import train_autoencoder, validate_autoencoder, train_with_validation
-from .analysis import (
-    extract_latent_vectors, cluster_and_visualize, cluster_latent_space,
-    reduce_dimensionality, analyze_cluster_characteristics
-)
-from .visualization import (
-    visualize_reconstructions, plot_training_history,
-    visualize_latent_space_2d, plot_cluster_analysis, compare_damage_types
-)
-from .local_logger import LocalLogger
+# DeepCluster utilities - tylko potrzebne funkcje
+from .training import train_with_validation  # Uniwersalne trenowanie dla DeepCluster
+from .visualization import visualize_reconstructions, plot_training_history
+from .local_logger import LocalLogger  # Logger lokalny
 from .metrics import (
     calculate_psnr, calculate_ssim, calculate_ms_ssim,
-    calculate_mse, calculate_mae, evaluate_reconstruction,
-    compare_models, CombinedLoss, PerceptualLoss
+    evaluate_reconstruction, CombinedLoss
+)
+# DeepCluster specific utilities
+from .deepcluster_utils import (
+    evaluate_deepcluster_pipeline,
+    extract_deepcluster_representations, 
+    deepcluster_clustering_analysis,
+    visualize_deepcluster_clustering,
+    deepcluster_stage_analysis,
+    print_deepcluster_summary
 )
 
+# DeepCluster utilities - eksportowane funkcje
 __all__ = [
-    # Training
-    'train_autoencoder', 'validate_autoencoder', 'train_with_validation',
-    # Analysis
-    'extract_latent_vectors', 'cluster_and_visualize', 'cluster_latent_space',
-    'reduce_dimensionality', 'analyze_cluster_characteristics',
+    # Training (uniwersalne dla DeepCluster)
+    'train_with_validation',
+    
     # Visualization
-    'visualize_reconstructions', 'plot_training_history',
-    'visualize_latent_space_2d', 'plot_cluster_analysis', 'compare_damage_types',
+    'visualize_reconstructions', 
+    'plot_training_history',
+    
     # Logging
     'LocalLogger',
-    # Metrics
+    
+    # Metrics (PSNR, SSIM - wymagane w projekcie)
     'calculate_psnr', 'calculate_ssim', 'calculate_ms_ssim',
-    'calculate_mse', 'calculate_mae', 'evaluate_reconstruction',
-    'compare_models', 'CombinedLoss', 'PerceptualLoss'
+    'evaluate_reconstruction', 'CombinedLoss',
+    
+    # DeepCluster specific functions
+    'evaluate_deepcluster_pipeline',
+    'extract_deepcluster_representations',
+    'deepcluster_clustering_analysis', 
+    'visualize_deepcluster_clustering',
+    'deepcluster_stage_analysis',
+    'print_deepcluster_summary'
 ]
