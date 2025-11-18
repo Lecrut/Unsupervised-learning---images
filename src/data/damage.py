@@ -1,13 +1,13 @@
-#%% Imports 
 import torch
 import numpy as np
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 #%% Define max size 
 MAX_MASK_SIZE = 0.0625
 
 #%% Damage Function - Square Mask - 4th channel output
 def square_damage(image: torch.Tensor) -> torch.Tensor:
+    """Dodaje kwadratowe uszkodzenie do obrazu"""
     C, H, W = image.shape
 
     max_mask_size = int(min(H, W) * MAX_MASK_SIZE)
@@ -23,6 +23,7 @@ def square_damage(image: torch.Tensor) -> torch.Tensor:
     
 #%% Damage Function - Noise Mask - 4th channel output
 def noise_damage(image: torch.Tensor) -> torch.Tensor:
+    """Dodaje losowe piksele szumu jako uszkodzenie"""
     C, H, W = image.shape
 
     num_noisy_pixels = int(H * W * MAX_MASK_SIZE)
@@ -39,6 +40,7 @@ def noise_damage(image: torch.Tensor) -> torch.Tensor:
 
 #%% Damage Function - Line Mask - 4th channel output
 def line_damage(image: torch.Tensor) -> torch.Tensor:
+    """Dodaje losowe linie jako uszkodzenie"""
     C, h, w = image.shape
 
     mask = torch.zeros(1, h, w, dtype=image.dtype, device=image.device)
@@ -76,3 +78,55 @@ def make_damage(dataset: Dataset):
             damaged_img = line_damage(img)
         damaged_images.append(damaged_img)
     return torch.stack(damaged_images)
+
+#%% Damaged Dataset Wrapper
+class DamagedDataset(Dataset):
+    """Dataset wrapper dodający uszkodzenia do obrazów on-the-fly"""
+    
+    def __init__(self, base_dataset, damage_types=['square', 'noise', 'line']):
+        self.base_dataset = base_dataset
+        self.damage_types = damage_types
+        self.damage_functions = {
+            'square': square_damage,
+            'noise': noise_damage,
+            'line': line_damage
+        }
+    
+    def __len__(self):
+        return len(self.base_dataset)
+    
+    def __getitem__(self, idx):
+        image = self.base_dataset[idx]
+        
+        damage_type = np.random.choice(self.damage_types)
+        damaged_image = self.damage_functions[damage_type](image)
+        
+        return damaged_image, image
+
+
+#%% Make Damage DataLoader
+def make_damage_loader(dataloader, batch_size=None, damage_types=['square', 'noise', 'line']):
+    """
+    Tworzy nowy DataLoader z uszkodzonymi obrazami
+    
+    Args:
+        dataloader: oryginalny DataLoader
+        batch_size: opcjonalnie nowy batch_size
+        damage_types: lista typów uszkodzeń do użycia
+    
+    Returns:
+        DataLoader zwracający (damaged_image, original_image)
+    """
+    base_dataset = dataloader.dataset
+    damaged_dataset = DamagedDataset(base_dataset, damage_types=damage_types)
+    
+    if batch_size is None:
+        batch_size = dataloader.batch_size
+    
+    return DataLoader(
+        damaged_dataset,
+        batch_size=batch_size,
+        shuffle=dataloader.sampler is None,
+        num_workers=dataloader.num_workers,
+        pin_memory=dataloader.pin_memory
+    )
