@@ -16,10 +16,10 @@ import os
 # Dodaj ścieżkę do modułu src
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.models.autoencoder import ConvAutoencoder
-from src.models.inpainting_model import UNetInpainting, SimpleInpainting
-from src.models.superres_model import SuperResolutionModel, LightweightSuperRes, ESPCNSuperRes
-from src.data.damages import (random_mask, rectangular_mask, noise_mask, 
+from src_old.models.autoencoder import ConvAutoencoder
+from src_old.models.inpainting_model import UNetInpainting, SimpleInpainting
+from src_old.models.superres_model import SuperResolutionModel, LightweightSuperRes, ESPCNSuperRes
+from src_old.data.damages import (random_mask, rectangular_mask, noise_mask, 
                               line_damage, circular_mask)
 
 
