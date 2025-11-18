@@ -6,9 +6,9 @@ import logging
 from typing import Optional, Dict, Any, Union
 from pathlib import Path
 from comet_ml import Experiment
-from dotenv import load_dotenv
 import numpy as np
 import matplotlib.pyplot as plt
+from dotenv import load_dotenv
 
 
 def check_comet_env():
@@ -36,9 +36,7 @@ class CometModel:
         
         if use_comet:
             try:
-                from comet_ml import Experiment
-                import os
-                from dotenv import load_dotenv
+                
                 load_dotenv()
                 
                 api_key = os.getenv("COMET_API_KEY")
