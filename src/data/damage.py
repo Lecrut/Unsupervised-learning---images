@@ -66,7 +66,7 @@ def line_damage(image: torch.Tensor) -> torch.Tensor:
     return torch.cat([image, mask], dim=0)
 
 #%% Damage Pipeline
-def make_damage(dataset: Dataset):
+def make_damage(dataset: Dataset) -> Dataset:
     damaged_images = []
     for img in dataset:
         damage_type = np.random.choice(['square', 'noise', 'line'])
@@ -77,54 +77,19 @@ def make_damage(dataset: Dataset):
         else:
             damaged_img = line_damage(img)
         damaged_images.append(damaged_img)
-    return torch.stack(damaged_images)
-
-#%% Damaged Dataset Wrapper
-class DamagedDataset(Dataset):
-    """Dataset wrapper dodający uszkodzenia do obrazów on-the-fly"""
-    
-    def __init__(self, base_dataset, damage_types=['square', 'noise', 'line']):
-        self.base_dataset = base_dataset
-        self.damage_types = damage_types
-        self.damage_functions = {
-            'square': square_damage,
-            'noise': noise_damage,
-            'line': line_damage
-        }
-    
-    def __len__(self):
-        return len(self.base_dataset)
-    
-    def __getitem__(self, idx):
-        image = self.base_dataset[idx]
-        
-        damage_type = np.random.choice(self.damage_types)
-        damaged_image = self.damage_functions[damage_type](image)
-        
-        return damaged_image, image
+    return Dataset(torch.stack(damaged_images))
 
 
 #%% Make Damage DataLoader
-def make_damage_loader(dataloader, batch_size=None, damage_types=['square', 'noise', 'line']):
-    """
-    Tworzy nowy DataLoader z uszkodzonymi obrazami
-    
-    Args:
-        dataloader: oryginalny DataLoader
-        batch_size: opcjonalnie nowy batch_size
-        damage_types: lista typów uszkodzeń do użycia
-    
-    Returns:
-        DataLoader zwracający (damaged_image, original_image)
-    """
+def make_damage_loader(dataloader, batch_size=None):
     base_dataset = dataloader.dataset
-    damaged_dataset = DamagedDataset(base_dataset, damage_types=damage_types)
+    damaged_dataset = make_damage(base_dataset)
     
     if batch_size is None:
         batch_size = dataloader.batch_size
     
     return DataLoader(
-        damaged_dataset,
+        damaged_dataset, 
         batch_size=batch_size,
         shuffle=dataloader.sampler is None,
         num_workers=dataloader.num_workers,
