@@ -1,13 +1,13 @@
-#%% Imports 
 import torch
 import numpy as np
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 #%% Define max size 
 MAX_MASK_SIZE = 0.0625
 
 #%% Damage Function - Square Mask - 4th channel output
 def square_damage(image: torch.Tensor) -> torch.Tensor:
+    """Dodaje kwadratowe uszkodzenie do obrazu"""
     C, H, W = image.shape
 
     max_mask_size = int(min(H, W) * MAX_MASK_SIZE)
@@ -23,6 +23,7 @@ def square_damage(image: torch.Tensor) -> torch.Tensor:
     
 #%% Damage Function - Noise Mask - 4th channel output
 def noise_damage(image: torch.Tensor) -> torch.Tensor:
+    """Dodaje losowe piksele szumu jako uszkodzenie"""
     C, H, W = image.shape
 
     num_noisy_pixels = int(H * W * MAX_MASK_SIZE)
@@ -39,6 +40,7 @@ def noise_damage(image: torch.Tensor) -> torch.Tensor:
 
 #%% Damage Function - Line Mask - 4th channel output
 def line_damage(image: torch.Tensor) -> torch.Tensor:
+    """Dodaje losowe linie jako uszkodzenie"""
     C, h, w = image.shape
 
     mask = torch.zeros(1, h, w, dtype=image.dtype, device=image.device)
@@ -64,7 +66,7 @@ def line_damage(image: torch.Tensor) -> torch.Tensor:
     return torch.cat([image, mask], dim=0)
 
 #%% Damage Pipeline
-def make_damage(dataset: Dataset):
+def make_damage(dataset: Dataset) -> Dataset:
     damaged_images = []
     for img in dataset:
         damage_type = np.random.choice(['square', 'noise', 'line'])
@@ -75,4 +77,21 @@ def make_damage(dataset: Dataset):
         else:
             damaged_img = line_damage(img)
         damaged_images.append(damaged_img)
-    return torch.stack(damaged_images)
+    return Dataset(torch.stack(damaged_images))
+
+
+#%% Make Damage DataLoader
+def make_damage_loader(dataloader, batch_size=None):
+    base_dataset = dataloader.dataset
+    damaged_dataset = make_damage(base_dataset)
+    
+    if batch_size is None:
+        batch_size = dataloader.batch_size
+    
+    return DataLoader(
+        damaged_dataset, 
+        batch_size=batch_size,
+        shuffle=dataloader.sampler is None,
+        num_workers=dataloader.num_workers,
+        pin_memory=dataloader.pin_memory
+    )
