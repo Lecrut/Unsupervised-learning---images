@@ -62,6 +62,13 @@ def line_damage(image: torch.Tensor) -> torch.Tensor:
     
     return torch.cat([image, mask], dim=0)
 
+#%% Damage Function - Transparent Mask - 4th channel output
+def transparent_damage(image: torch.Tensor) -> torch.Tensor:
+    C, H, W = image.shape
+    mask = torch.zeros(1, H, W, dtype=image.dtype, device=image.device)
+    return torch.cat([image, mask], dim=0)
+
+
 #%% Make Damage DataLoader
 def make_damage_loader(dataloader, batch_size=None):
     damage_functions = [square_damage, noise_damage, line_damage]
@@ -74,9 +81,10 @@ def make_damage_loader(dataloader, batch_size=None):
             image = item['image'] if isinstance(item, dict) else item
             damage_fn = np.random.choice(damage_functions)
             damaged_image = damage_fn(image)
+            original_with_mask = transparent_damage(image)
             
             damaged_images.append(damaged_image)
-            original_images.append(image)
+            original_images.append(original_with_mask)
         
         return torch.stack(damaged_images), torch.stack(original_images)
     
