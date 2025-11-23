@@ -5,6 +5,9 @@ from torch.utils.data import Dataset, DataLoader
 #%% Define max size 
 MAX_MASK_SIZE = 0.0625
 
+#%% Check device - Cuda
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 #%% Damage Function - Square Mask - 4th channel output
 def square_damage(image: torch.Tensor) -> torch.Tensor:
     C, H, W = image.shape
@@ -79,6 +82,7 @@ def make_damage_loader(dataloader, batch_size=None):
         
         for item in batch:
             image = item['image'] if isinstance(item, dict) else item
+            image = image.to(device)
             damage_fn = np.random.choice(damage_functions)
             damaged_image = damage_fn(image)
             original_with_mask = transparent_damage(image)

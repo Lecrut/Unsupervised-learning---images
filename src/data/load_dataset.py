@@ -1,21 +1,27 @@
+#%% Imports
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from torchvision import transforms
+import torch
 
+#%% Constants definitions
 DATASET_NAME = "huggan/wikiart"
 IMAGE_SIZE = 256
 
+#%% Check device - Cuda
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+#%% Preprocessing function
 def preprocess(batch):
     transform = transforms.Compose([
         transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
         transforms.ToTensor(),
     ])
 
-    batch['image'] = [transform(img.convert('RGB')) for img in batch['image']]
+    batch['image'] = [transform(img.convert('RGB')).to(device) for img in batch['image']]
     return batch
 
-
+#%% Load dataset and create DataLoaders
 def load_data(train_split=0.7, test_split=0.15, batch_size=32, num_workers=0):
     dataset = load_dataset(DATASET_NAME, split='train')
     dataset = dataset.with_transform(preprocess)
