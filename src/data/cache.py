@@ -2,7 +2,7 @@
 import os
 import sys
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image
@@ -17,24 +17,43 @@ DAMAGED_DATASET_DIR = 'data/damaged_dataset'
 #%% Check device - Cuda
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+class ImageFolderDataset(Dataset):
+    def __init__(self, folder, transform=None):
+        self.image_paths = sorted([os.path.join(folder, f) for f in os.listdir(folder)
+                                   if f.endswith(('.png', '.jpg', '.jpeg'))])
+        self.transform = transform
+        self.to_tensor = transforms.ToTensor()
+    
+    def __len__(self):
+        return len(self.image_paths)
+    
+    def __getitem__(self, idx):
+        img = Image.open(self.image_paths[idx]).convert('RGBA')
+        img_tensor = self.to_tensor(img)
+        if self.transform:
+            img_tensor = self.transform(img_tensor)
+        return img_tensor,
+
 #%% Create DataLoader from images in a folder
 def create_image_dataloader(folder, transform=None, batch_size=32, num_workers=4):
-    image_paths = [os.path.join(folder, f) for f in os.listdir(folder)
-                   if f.endswith(('.png', '.jpg', '.jpeg'))]
+    # image_paths = [os.path.join(folder, f) for f in os.listdir(folder)
+    #                if f.endswith(('.png', '.jpg', '.jpeg'))]
 
-    images = []
-    to_tensor = transforms.ToTensor()
+    # images = []
+    # to_tensor = transforms.ToTensor()
 
-    for path in image_paths:
-        img = Image.open(path).convert('RGBA') 
-        img_tensor = to_tensor(img)
+    # for path in image_paths:
+    #     img = Image.open(path).convert('RGBA') 
+    #     img_tensor = to_tensor(img)
 
-        if transform:
-            img_tensor = transform(img_tensor)
+    #     if transform:
+    #         img_tensor = transform(img_tensor)
 
-        images.append(img_tensor)
+    #     images.append(img_tensor)
 
-    dataset = TensorDataset(torch.stack(images))
+    # dataset = TensorDataset(torch.stack(images))
+
+    dataset = ImageFolderDataset(folder, transform)
     loader = DataLoader(dataset,
                         batch_size=batch_size,
                         shuffle=False,
