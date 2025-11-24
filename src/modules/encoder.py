@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class Encoder(nn.Module):
-    def __init__(self, latent_dim=128, input_channels=3, image_size=256):
+    def __init__(self, latent_dim=128, input_channels=4, image_size=256):
         super().__init__()
         self.latent_dim = latent_dim
         self.image_size = image_size
@@ -34,11 +34,11 @@ class Encoder(nn.Module):
             nn.Flatten(),
             nn.Linear(flat_size, latent_dim),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.BatchNorm1d(latent_dim)
+            nn.BatchNorm1d(latent_dim) #normalizacja embeddingu
         )
     
     def forward(self, x):
-        x = 2 * x - 1
+        x = 2 * x - 1 
         x1 = self.encoder_block1(x)
         x2 = self.encoder_block2(x1)
         x3 = self.encoder_block3(x2)

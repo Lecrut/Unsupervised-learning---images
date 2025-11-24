@@ -3,7 +3,7 @@ import torch.nn as nn
 
 #%% Decoder Module - VaDE-inspired VAE Decoder
 class Decoder(nn.Module):
-    def __init__(self, latent_dim=128, output_channels=3, image_size=256):
+    def __init__(self, latent_dim=128, output_channels=4, image_size=256):
         super().__init__()
         self.latent_dim = latent_dim
         self.image_size = image_size
