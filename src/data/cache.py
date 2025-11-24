@@ -17,6 +17,7 @@ DAMAGED_DATASET_DIR = 'data/damaged_dataset'
 #%% Check device - Cuda
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+#%% Custom Dataset for loading images from a folder
 class ImageFolderDataset(Dataset):
     def __init__(self, folder, transform=None):
         self.image_paths = sorted([os.path.join(folder, f) for f in os.listdir(folder)
@@ -36,23 +37,7 @@ class ImageFolderDataset(Dataset):
 
 #%% Create DataLoader from images in a folder
 def create_image_dataloader(folder, transform=None, batch_size=32, num_workers=4):
-    # image_paths = [os.path.join(folder, f) for f in os.listdir(folder)
-    #                if f.endswith(('.png', '.jpg', '.jpeg'))]
-
-    # images = []
-    # to_tensor = transforms.ToTensor()
-
-    # for path in image_paths:
-    #     img = Image.open(path).convert('RGBA') 
-    #     img_tensor = to_tensor(img)
-
-    #     if transform:
-    #         img_tensor = transform(img_tensor)
-
-    #     images.append(img_tensor)
-
-    # dataset = TensorDataset(torch.stack(images))
-
+    print(f"Tworzenie DataLoadera z obrazów w {folder}")
     dataset = ImageFolderDataset(folder, transform)
     loader = DataLoader(dataset,
                         batch_size=batch_size,
