@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 from typing import Dict, Tuple, Optional, List
-
 from .encoder import Encoder
 from .decoder import Decoder
 

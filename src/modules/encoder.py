@@ -1,6 +1,8 @@
+#%% Imports
 import torch
 import torch.nn as nn
 
+#%% Encoder Definition
 class Encoder(nn.Module):
     def __init__(self, latent_dim=128, input_channels=4, image_size=256):
         super().__init__()

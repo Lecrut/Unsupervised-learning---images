@@ -18,10 +18,6 @@ class DAConv(nn.Module):
         self.pw = nn.Conv2d(channels, channels, 1)
 
     def forward(self, x, rep):
-        """
-        x   : [B, C, H, W]
-        rep : [B, rep_dim]
-        """
         B, C, H, W = x.shape
 
         kernel = self.kernel_fc(rep).view(B * C, 1, 3, 3)
