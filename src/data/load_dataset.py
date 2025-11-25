@@ -65,3 +65,33 @@ def make_small_subset(dataloader, subset_fraction=0.125):
     print(f"Liczba batchy: {len(dataloader)} -> {len(small_loader)}")
     
     return small_loader
+
+#%% Function to shuffle data (correct images and damaged)
+def shuffle_data(correct_dataloader, damaged_dataloader, damaged_percent=0.5):
+    correct_size = len(correct_dataloader.dataset)
+    damaged_size = len(damaged_dataloader.dataset)
+    
+    num_damaged = int(min(correct_size, damaged_size) * damaged_percent)
+    num_correct = int(num_damaged * (1 - damaged_percent) / damaged_percent)
+    
+    correct_indices = torch.randperm(correct_size)[:num_correct].tolist()
+    damaged_indices = torch.randperm(damaged_size)[:num_damaged].tolist()
+    
+    correct_subset = Subset(correct_dataloader.dataset, correct_indices)
+    damaged_subset = Subset(damaged_dataloader.dataset, damaged_indices)
+    
+    combined_dataset = torch.utils.data.ConcatDataset([correct_subset, damaged_subset])
+    
+    shuffled_loader = DataLoader(
+        combined_dataset,
+        batch_size=correct_dataloader.batch_size,
+        shuffle=True,
+        num_workers=correct_dataloader.num_workers,
+        pin_memory=True,
+        persistent_workers=True
+    )
+    
+    print(f"Utworzono dataset: {num_correct} poprawnych + {num_damaged} uszkodzonych = {len(combined_dataset)} obrazów")
+    print(f"Stosunek uszkodzeń: {damaged_percent*100:.1f}%")
+    
+    return shuffled_loader
