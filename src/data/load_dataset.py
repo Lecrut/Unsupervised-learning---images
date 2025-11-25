@@ -2,6 +2,7 @@
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from torchvision import transforms
+from torch.utils.data import Subset
 import torch
 
 #%% Constants definitions
@@ -42,3 +43,25 @@ def load_data(train_split=0.7, test_split=0.15, batch_size=32, num_workers=0):
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     
     return train_loader, test_loader, val_loader
+
+#%% Make small subset of dataset for quick testing
+def make_small_subset(dataloader, subset_fraction=0.125):    
+    dataset_size = len(dataloader.dataset)
+    subset_size = int(dataset_size * subset_fraction)
+    indices = list(range(subset_size))
+
+    small_dataset = Subset(dataloader.dataset, indices)
+    small_loader = DataLoader(
+        small_dataset,
+        batch_size=dataloader.batch_size,
+        shuffle=True,
+        num_workers=dataloader.num_workers,
+        pin_memory=True,
+        persistent_workers=True
+    )
+
+    print(f"Oryginalny zbiór: {dataset_size} obrazów")
+    print(f"Mniejszy zbiór ({subset_fraction*100:.1f}%): {subset_size} obrazów")
+    print(f"Liczba batchy: {len(dataloader)} -> {len(small_loader)}")
+    
+    return small_loader
