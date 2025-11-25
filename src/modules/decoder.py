@@ -48,11 +48,13 @@ class Decoder(nn.Module):
         
         x = self.decoder_block1(x)
         if skip_connections is not None:
-            x = torch.cat([x, skip_connections[2]], dim=1)
+            x = torch.cat([x, skip_connections[1]], dim=1)
+            # x += skip_connections[1]  # [B, 128, 64, 64] + [B, 128, 64, 64]
         
         x = self.decoder_block2(x)
         if skip_connections is not None:
-            x = torch.cat([x, skip_connections[1]], dim=1)
+            x = torch.cat([x, skip_connections[0]], dim=1)
+            # x+= skip_connections[0]  # [B, 64, 128, 128] + [B, 64, 128, 128]
         
         x = self.decoder_block3(x)
         x = self.final_conv(x)

@@ -46,11 +46,11 @@ class Autoencoder(nn.Module):
 
         for batch in tqdm(dataloader, desc="Training Epoch"):
             if isinstance(batch, dict):
-                img = batch['image'].to(self.device)
+                img = batch['image'].to(self.device, non_blocking=True)
             else:
-                img = batch[0].to(self.device)  if isinstance(batch, (list, tuple)) else batch.to(self.device)
+                img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
             
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
             reconstruction, _ = self.forward(img)
             loss = self.compute_loss(img, reconstruction)
 
@@ -74,9 +74,9 @@ class Autoencoder(nn.Module):
         # validation is training without back propagation and weight update
         for batch in tqdm(dataloader, desc="Validation Epoch"):
             if isinstance(batch, dict):
-                img = batch['image'].to(self.device)
+                img = batch['image'].to(self.device, non_blocking=True)
             else:
-                img = batch[0].to(self.device)  if isinstance(batch, (list, tuple)) else batch.to(self.device)
+                img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
             
             reconstruction, _ = self.forward(img)
             loss = self.compute_loss(img, reconstruction)
