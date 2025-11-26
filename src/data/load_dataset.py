@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.data import Subset
 import torch
+from typing import Any, Dict
 
 #%% Constants definitions
 DATASET_NAME = "huggan/wikiart"
@@ -44,6 +45,39 @@ def load_data(train_split=0.7, test_split=0.15, batch_size=32, num_workers=0):
     
     return train_loader, test_loader, val_loader
 
+def safe_collate(batch: Any) -> Dict[str, torch.Tensor]:
+    """
+    Bezpieczne collate:
+    - obsługuje dict {'image': tensor}, tuple/list
+    - dba, by wszystkie elementy miały 4 kanały (RGB + maska). Jeśli obraz ma 3 kanały, dokleja zerową maskę.
+    """
+    images = []
+    for item in batch:
+        if isinstance(item, dict) and 'image' in item:
+            img = item['image']
+        elif isinstance(item, (list, tuple)) and len(item) > 0:
+            img = item[0]
+        else:
+            img = None
+        if img is None:
+            continue
+        if img.dim() == 4:
+            # już batch; rozbij na pojedyncze
+            for j in range(img.size(0)):
+                images.append(img[j])
+            continue
+        if img.shape[0] == 3:
+            _, H, W = img.shape
+            mask = torch.zeros((1, H, W), device=img.device, dtype=img.dtype)
+            img = torch.cat([img, mask], dim=0)
+        images.append(img)
+    if len(images) == 0:
+        return {'image': torch.empty(0)}
+    # ujednolić urządzenie, by uniknąć miksu CPU/GPU
+    target_device = images[0].device
+    images = [img.to(target_device) for img in images]
+    return {'image': torch.stack(images, dim=0)}
+
 #%% Make small subset of dataset for quick testing
 def make_small_subset(dataloader, subset_fraction=0.125):    
     dataset_size = len(dataloader.dataset)
@@ -51,13 +85,15 @@ def make_small_subset(dataloader, subset_fraction=0.125):
     indices = list(range(subset_size))
 
     small_dataset = Subset(dataloader.dataset, indices)
+
     small_loader = DataLoader(
         small_dataset,
         batch_size=dataloader.batch_size,
         shuffle=True,
         num_workers=dataloader.num_workers,
-        pin_memory=True,
-        persistent_workers=True
+        pin_memory=False,  # dane już są na GPU po preprocess, więc pin_memory wyłączone
+        persistent_workers=False,
+        collate_fn=safe_collate
     )
 
     print(f"Oryginalny zbiór: {dataset_size} obrazów")
@@ -87,8 +123,9 @@ def shuffle_data(correct_dataloader, damaged_dataloader, damaged_percent=0.5):
         batch_size=correct_dataloader.batch_size,
         shuffle=True,
         num_workers=correct_dataloader.num_workers,
-        pin_memory=True,
-        persistent_workers=True
+        pin_memory=False,  # dane już na GPU po preprocess
+        persistent_workers=False,
+        collate_fn=safe_collate
     )
     
     print(f"Utworzono dataset: {num_correct} poprawnych + {num_damaged} uszkodzonych = {len(combined_dataset)} obrazów")

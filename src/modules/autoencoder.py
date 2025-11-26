@@ -17,8 +17,11 @@ class Autoencoder(nn.Module):
         self.latent_dim = latent_dim
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.encoder = Encoder(latent_dim, input_channels, image_size)
-        self.decoder = Decoder(latent_dim, input_channels, image_size)
+        self.encoder = Encoder(latent_dim, input_channels, image_size).to(self.device)
+        self.decoder = Decoder(latent_dim, input_channels, image_size).to(self.device)
+
+        # upewnij się, że cały moduł jest na właściwym urządzeniu
+        self.to(self.device)
 
         self.optimizer = optim.Adam(self.parameters(), lr=learning_rate)
         self.mse_loss = nn.MSELoss()
@@ -31,6 +34,13 @@ class Autoencoder(nn.Module):
         }
     
     def forward(self, x):
+        # akceptuj zarówno tensor, jak i batch (dict/tuple); zapewnij wymagane kanały
+        if not isinstance(x, torch.Tensor):
+            x = self._prepare_batch(x)
+        else:
+            if x.dim() == 4 and x.shape[1] == 3 and getattr(self.encoder, "input_channels", 3) == 4:
+                mask = torch.zeros((x.size(0), 1, x.size(2), x.size(3)), device=x.device, dtype=x.dtype)
+                x = torch.cat([x, mask], dim=1)
         latent, skip_connections = self.encoder(x)
         reconstruction = self.decoder(latent, skip_connections)
         return reconstruction, latent
@@ -39,17 +49,39 @@ class Autoencoder(nn.Module):
         recon_loss = self.mse_loss(reconstruction, original)
         return recon_loss
 
+    def _prepare_batch(self, batch: Dict) -> torch.Tensor:
+        """
+        Przygotowuje batch do sieci:
+        - akceptuje dict {'image': tensor} lub tuple/list
+        - przenosi na właściwe urządzenie
+        - jeśli kanały = 3, dokleja zerową maskę jako 4. kanał
+        """
+        if isinstance(batch, dict):
+            img = batch.get('image', None)
+        elif isinstance(batch, (list, tuple)) and len(batch) > 0:
+            img = batch[0]
+        else:
+            img = batch
+
+        if img is None:
+            return torch.empty(0, device=self.device)
+
+        img = img.to(self.device, non_blocking=True)
+        if img.dim() == 4 and img.shape[1] == 3 and self.encoder.input_channels == 4:
+            # doklej pustą maskę
+            mask = torch.zeros((img.size(0), 1, img.size(2), img.size(3)), device=self.device, dtype=img.dtype)
+            img = torch.cat([img, mask], dim=1)
+        return img
+
     def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
         self.train()
         epoch_loss = 0.0
         epoch_recon_loss = 0.0 #reconstruction error
 
         for batch in tqdm(dataloader, desc="Training Epoch"):
-            if isinstance(batch, dict):
-                img = batch['image'].to(self.device, non_blocking=True)
-            else:
-                img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
-            
+            img = self._prepare_batch(batch)
+            if img.numel() == 0:
+                continue
             self.optimizer.zero_grad(set_to_none=True)
             reconstruction, _ = self.forward(img)
             loss = self.compute_loss(img, reconstruction)
@@ -73,11 +105,9 @@ class Autoencoder(nn.Module):
 
         # validation is training without back propagation and weight update
         for batch in tqdm(dataloader, desc="Validation Epoch"):
-            if isinstance(batch, dict):
-                img = batch['image'].to(self.device, non_blocking=True)
-            else:
-                img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
-            
+            img = self._prepare_batch(batch)
+            if img.numel() == 0:
+                continue
             reconstruction, _ = self.forward(img)
             loss = self.compute_loss(img, reconstruction)
 
@@ -134,10 +164,9 @@ class Autoencoder(nn.Module):
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Extracting Latent Vectors"):
-                if isinstance(batch, dict):
-                    img = batch['image'].to(self.device)
-                else:
-                    img = batch[0].to(self.device)  if isinstance(batch, (list, tuple)) else batch.to(self.device)
+                img = self._prepare_batch(batch)
+                if img.numel() == 0:
+                    continue
                 
                 # extraction from image
                 latent, _ = self.encoder(img)

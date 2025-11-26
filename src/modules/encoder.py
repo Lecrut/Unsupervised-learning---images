@@ -7,6 +7,7 @@ class Encoder(nn.Module):
     def __init__(self, latent_dim=128, input_channels=4, image_size=256):
         super().__init__()
         self.latent_dim = latent_dim
+        self.input_channels = input_channels
         self.image_size = image_size
         self.conv_output_size = image_size // 8
         
