@@ -1,20 +1,19 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from dataclasses import dataclass
 from typing import Optional, Tuple
 from sklearn.decomposition import PCA
 from .la_sp import LaSP
 
 
-@dataclass
 class PCAReducerConfig:
-    """Konfiguracja PCA"""
+    """Prosta konfiguracja PCA (randomized SVD wg Halko et al., 2011)."""
 
-    n_components: int = 50          #ile głównych składowych zachowujemy
-    whiten: bool = True             #normalizacja wariancji
-    random_state: int = 42          #ziarno losowe
-    svd_solver: str = "randomized"  #randomized PCA per Halko et al. 2011
+    def __init__(self, n_components=50, whiten=True, random_state=42, svd_solver="randomized"):
+        self.n_components = n_components
+        self.whiten = whiten
+        self.random_state = random_state
+        self.svd_solver = svd_solver  # randomized PCA wg Halko et al. (2011)
 
 
 class PCAReducer:
@@ -69,11 +68,10 @@ class PCAReducer:
         self.fitted = True
         return przeksztalcone
 
-    @property
-    def explained_variance_ratio_(self):
+    def explained_variance_ratio(self):
         if self.model is None or not hasattr(self.model, "explained_variance_ratio_"):
             return None
-        return getattr(self.model, "explained_variance_ratio_", None)
+        return self.model.explained_variance_ratio_
 
 #LaSP + PCA dla clean / damaged
 def run_lasp_pca(
