@@ -46,11 +46,11 @@ class ConditionalDDPM(nn.Module):
         return self.network(z_t, t, c)
 
 #%% Latent Repaint Inpainting Function
-def latent_repaint_inpainting(ddpm, z0, m, c, T=250, r=10, j=10):
+def latent_repaint_inpainting(z0, m, c, T=250, r=10, j=10):
     z0 = z0.to(device)
     m = m.to(device)
     c = c.to(device)
-    ddpm = ddpm.to(device)
+    ddpm = ConditionalDDPM(in_channels=z0.shape[1], num_clusters=torch.max(c).item() + 1).to(device)
 
     betas = torch.linspace(1e-4, 0.02, T, device=device)  
     alphas = 1.0 - betas
