@@ -31,8 +31,21 @@ class Decoder(nn.Module):
             nn.Dropout2d(0.1)
         )
         
+        self.decoder_block2_no_skip = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.BatchNorm2d(64),
+            nn.Dropout2d(0.1)
+        )
+        
         self.decoder_block3 = nn.Sequential(
             nn.ConvTranspose2d(64 + 64, 32, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.BatchNorm2d(32)
+        )
+        
+        self.decoder_block3_no_skip = nn.Sequential(
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
             nn.BatchNorm2d(32)
         )
@@ -50,14 +63,16 @@ class Decoder(nn.Module):
         x = self.decoder_block1(x)
         if skip_connections is not None:
             x = torch.cat([x, skip_connections[1]], dim=1)
-            # x += skip_connections[1]  # [B, 128, 64, 64] + [B, 128, 64, 64]
+            x = self.decoder_block2(x)
+        else:
+            x = self.decoder_block2_no_skip(x)
         
-        x = self.decoder_block2(x)
         if skip_connections is not None:
             x = torch.cat([x, skip_connections[0]], dim=1)
-            # x+= skip_connections[0]  # [B, 64, 128, 128] + [B, 64, 128, 128]
+            x = self.decoder_block3(x)
+        else:
+            x = self.decoder_block3_no_skip(x)
         
-        x = self.decoder_block3(x)
         x = self.final_conv(x)
         
         return x

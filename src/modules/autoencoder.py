@@ -157,10 +157,33 @@ class Autoencoder(nn.Module):
             latent, _ = self.encoder(x)
         return latent
 
-    def decode(self, x: torch.Tensor, skip_connections: Optional[List[torch.Tensor]] = None) -> torch.Tensor:
+    def decode(self, latent, skip_connections: Optional[List[torch.Tensor]] = None) -> torch.Tensor:
+        self.eval()
+        
+        if isinstance(latent, np.ndarray):
+            latent = torch.from_numpy(latent).float()
+        
+        latent = latent.to(self.device)
+        
         with torch.no_grad():
-            reconstruction = self.decoder(x, skip_connections)
+            reconstruction = self.decoder(latent, skip_connections)
+        
         return reconstruction
+    
+    def decode_batch(self, latent_vectors: np.ndarray, batch_size: int = 64) -> np.ndarray:
+        self.eval()
+        reconstructed = []
+        
+        num_samples = latent_vectors.shape[0]
+        for i in range(0, num_samples, batch_size):
+            batch = latent_vectors[i:i+batch_size]
+            batch_tensor = torch.from_numpy(batch).float().to(self.device)
+            
+            with torch.no_grad():
+                recon = self.decoder(batch_tensor, None)
+                reconstructed.append(recon.cpu().numpy())
+        
+        return np.concatenate(reconstructed, axis=0)
 
     # Functions to save best model
     def save_checkpoint(self, path: Path, epoch: int, val_loss: float):
