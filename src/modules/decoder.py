@@ -10,9 +10,14 @@ class Decoder(nn.Module):
         self.image_size = image_size
         self.conv_output_size = image_size // 8
         
+        intermediate_dim = 2048
         flat_size = 256 * self.conv_output_size * self.conv_output_size
         self.from_latent = nn.Sequential(
-            nn.Linear(latent_dim, flat_size),
+            nn.Linear(latent_dim, intermediate_dim),  # 512 → 2048
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.BatchNorm1d(intermediate_dim),
+            nn.Dropout(0.2),
+            nn.Linear(intermediate_dim, flat_size),  # 2048 → 262,144
             nn.LeakyReLU(0.2, inplace=True),
             nn.BatchNorm1d(flat_size)
         )

@@ -9,6 +9,9 @@ class Encoder(nn.Module):
         self.latent_dim = latent_dim
         self.image_size = image_size
         self.conv_output_size = image_size // 8
+
+        flat_size = 256 * 32 * 32  
+        intermediate_dim = 2048
         
         self.encoder_block1 = nn.Sequential(
             nn.Conv2d(input_channels, 64, kernel_size=4, stride=2, padding=1),
@@ -34,9 +37,13 @@ class Encoder(nn.Module):
         flat_size = 256 * self.conv_output_size * self.conv_output_size
         self.to_latent = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(flat_size, latent_dim),
+            nn.Linear(flat_size, intermediate_dim),  # 262,144 → 2048
             nn.LeakyReLU(0.2, inplace=True),
-            nn.BatchNorm1d(latent_dim) #normalizacja embeddingu
+            nn.BatchNorm1d(intermediate_dim),
+            nn.Dropout(0.2),
+            nn.Linear(intermediate_dim, latent_dim),  # 2048 → 512
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.BatchNorm1d(latent_dim)
         )
     
     def forward(self, x):
