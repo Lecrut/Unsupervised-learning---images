@@ -151,8 +151,8 @@ class Autoencoder(nn.Module):
             else:
                 patience_counter += 1
                 
-                if patience_counter >= early_stopping:
-                    print(f'\nEarly stopping po {epoch+1} epokach')
+                if early_stopping is not None and patience_counter >= early_stopping:
+                    print(f"Early stopping at epoch {epoch+1}")
                     break
         
         return self.history
