@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from typing import Optional, Tuple
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, KernelPCA
 from .la_sp import LaSP
 
 
@@ -254,3 +254,58 @@ def run_shared_lasp_pca(
         n_components=n_components,
     )
     return pca_clean, pca_dmg, lasp, pca_model
+
+
+def run_shared_lasp_kpca(
+    latent_clean: np.ndarray,
+    latent_damaged: np.ndarray,
+    proj_dim: Optional[int] = None,
+    n_components: int = 32,
+    device: Optional[torch.device] = None,
+    lasp_epochs: int = 10,
+    batch_size: int = 256,
+    lr: float = 1e-3,
+    kernel: str = "rbf",
+    gamma: Optional[float] = None,
+) -> Tuple[np.ndarray, np.ndarray, nn.Module, KernelPCA]:
+    """
+    Wspólny tor: (opcjonalnie) uczony LaSP -> jedno KernelPCA dla clean + damaged.
+    Zwraca (kpca_clean, kpca_dmg, lasp_model, kpca_model).
+    """
+    urzadzenie = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    latent_dim_clean = latent_clean.shape[1]
+    latent_dim_dmg = latent_damaged.shape[1]
+    assert latent_dim_clean == latent_dim_dmg, "Latenty clean i damaged muszą mieć ten sam wymiar"
+
+    if proj_dim is None or proj_dim == latent_dim_clean:
+        lasp = nn.Identity().to(urzadzenie)
+    else:
+        lasp = train_lasp(
+            latent_clean=latent_clean,
+            latent_damaged=latent_damaged,
+            proj_dim=proj_dim,
+            device=urzadzenie,
+            epochs=lasp_epochs,
+            batch_size=batch_size,
+            lr=lr,
+        )
+
+    with torch.no_grad():
+        clean_t = torch.from_numpy(latent_clean).to(urzadzenie).float()
+        dmg_t = torch.from_numpy(latent_damaged).to(urzadzenie).float()
+        rep_clean = lasp(clean_t).cpu().numpy()
+        rep_dmg = lasp(dmg_t).cpu().numpy()
+
+    kpca = KernelPCA(
+        n_components=n_components,
+        kernel=kernel,
+        gamma=gamma,
+        fit_inverse_transform=False,
+        random_state=42,
+    )
+    rep_all = np.concatenate([rep_clean, rep_dmg], axis=0)
+    kpca.fit(rep_all)
+    kpca_clean = kpca.transform(rep_clean)
+    kpca_dmg = kpca.transform(rep_dmg)
+
+    return kpca_clean, kpca_dmg, lasp, kpca
