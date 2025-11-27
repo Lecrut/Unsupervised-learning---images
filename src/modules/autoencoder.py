@@ -20,6 +20,8 @@ class Autoencoder(nn.Module):
         self.encoder = Encoder(latent_dim, input_channels, image_size)
         self.decoder = Decoder(latent_dim, input_channels, image_size)
 
+        self.to(self.device)
+
         self.optimizer = optim.Adam(self.parameters(), lr=learning_rate)
         self.mse_loss = nn.MSELoss()
 
@@ -153,6 +155,7 @@ class Autoencoder(nn.Module):
 
     # in future: encode and decode functions:
     def encode(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.device)
         with torch.no_grad():
             latent, _ = self.encoder(x)
         return latent
@@ -202,6 +205,9 @@ class Autoencoder(nn.Module):
         checkpoint = torch.load(path, map_location=self.device)
         self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
         self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
+
+        self.to(self.device)
+
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.history = checkpoint.get('history', self.history)
         return checkpoint['epoch'], checkpoint['val_loss']
