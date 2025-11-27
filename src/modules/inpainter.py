@@ -5,7 +5,7 @@ import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 #%% Inpainter Model
-def in_painter_model_torch_advanced(
+def in_painter_model(
         latent_damaged: torch.Tensor,
         clusters,
         lambda_center: float = 0.5,

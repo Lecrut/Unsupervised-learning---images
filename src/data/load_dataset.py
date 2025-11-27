@@ -1,8 +1,7 @@
 #%% Imports
 from datasets import load_dataset
-from torch.utils.data import DataLoader
 from torchvision import transforms
-from torch.utils.data import Subset
+from torch.utils.data import DataLoader, Subset, ConcatDataset
 import torch
 
 #%% Constants definitions
@@ -22,10 +21,23 @@ def preprocess(batch):
     batch['image'] = [transform(img.convert('RGB')).to(device) for img in batch['image']]
     return batch
 
+#%% Preprocessing function with alpha channel
+def preprocess_with_alpha(batch):
+    transform = transforms.Compose([
+        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+        transforms.ToTensor(),
+    ])
+
+    batch['image'] = [transform(img.convert('RGBA')).to(device) for img in batch['image']]
+    return batch
+
 #%% Load dataset and create DataLoaders
-def load_data(train_split=0.7, test_split=0.15, batch_size=32, num_workers=0):
+def load_data(train_split=0.7, test_split=0.15, batch_size=32, num_workers=4, add_fourth_channel=False):
     dataset = load_dataset(DATASET_NAME, split='train')
-    dataset = dataset.with_transform(preprocess)
+    if add_fourth_channel:
+        dataset = dataset.with_transform(preprocess_with_alpha)
+    else:
+        dataset = dataset.with_transform(preprocess)
     
     train_size = int(len(dataset) * train_split)
     test_size = int(len(dataset) * test_split)
@@ -66,13 +78,30 @@ def make_small_subset(dataloader, subset_fraction=0.125):
     
     return small_loader
 
+#%% Custom collate function to concatenate images from different datasets
+def concatenate_fn(batch):
+    if isinstance(batch[0], torch.Tensor):
+        return torch.stack(batch)
+
+    if isinstance(batch[0], (tuple, list)):
+        transposed = list(zip(*batch))
+        result = []
+        for items in transposed:
+            if isinstance(items[0], torch.Tensor):
+                result.append(torch.stack(items))
+            else:
+                result.append(list(items))
+        return tuple(result)
+    
+    return batch
+
 #%% Function to shuffle data (correct images and damaged)
 def shuffle_data(correct_dataloader, damaged_dataloader, damaged_percent=0.5):
     correct_size = len(correct_dataloader.dataset)
     damaged_size = len(damaged_dataloader.dataset)
     
     num_damaged = int(min(correct_size, damaged_size) * damaged_percent)
-    num_correct = int(num_damaged * (1 - damaged_percent) / damaged_percent)
+    num_correct = max(1, int(num_damaged * (1 - damaged_percent) / damaged_percent))
     
     correct_indices = torch.randperm(correct_size)[:num_correct].tolist()
     damaged_indices = torch.randperm(damaged_size)[:num_damaged].tolist()
@@ -80,13 +109,14 @@ def shuffle_data(correct_dataloader, damaged_dataloader, damaged_percent=0.5):
     correct_subset = Subset(correct_dataloader.dataset, correct_indices)
     damaged_subset = Subset(damaged_dataloader.dataset, damaged_indices)
     
-    combined_dataset = torch.utils.data.ConcatDataset([correct_subset, damaged_subset])
+    combined_dataset = ConcatDataset([correct_subset, damaged_subset])
     
     shuffled_loader = DataLoader(
         combined_dataset,
         batch_size=correct_dataloader.batch_size,
         shuffle=True,
-        num_workers=correct_dataloader.num_workers,
+        collate_fn=concatenate_fn,
+        num_workers=max(1, correct_dataloader.num_workers),
         pin_memory=True,
         persistent_workers=True
     )
