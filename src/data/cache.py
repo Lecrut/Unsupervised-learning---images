@@ -33,7 +33,7 @@ class ImageFolderDataset(Dataset):
         img_tensor = self.to_tensor(img)
         if self.transform:
             img_tensor = self.transform(img_tensor)
-        return img_tensor,
+        return img_tensor
 
 #%% Create DataLoader from images in a folder
 def create_image_dataloader(folder, transform=None, batch_size=32, num_workers=4):

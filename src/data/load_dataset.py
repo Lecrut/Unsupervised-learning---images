@@ -31,6 +31,21 @@ def preprocess_with_alpha(batch):
     batch['image'] = [transform(img.convert('RGBA')).to(device) for img in batch['image']]
     return batch
 
+#%% Image Dataset Wrapper
+class ImageDatasetWrapper(torch.utils.data.Dataset):
+    def __init__(self, hf_dataset):
+        self.ds = hf_dataset
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        item = self.ds[idx]
+        img = item.get('image', None)
+        if isinstance(img, list) and len(img) > 0:
+            img = img[0]
+        return img
+
 #%% Load dataset and create DataLoaders
 def load_data(train_split=0.7, test_split=0.15, batch_size=32, num_workers=4, add_fourth_channel=False):
     dataset = load_dataset(DATASET_NAME, split='train')
@@ -49,6 +64,10 @@ def load_data(train_split=0.7, test_split=0.15, batch_size=32, num_workers=4, ad
     test_val_splits = temp_ds.train_test_split(train_size=test_size, seed=42)
     test_ds = test_val_splits['train']
     val_ds = test_val_splits['test']
+
+    train_ds = ImageDatasetWrapper(train_ds)
+    test_ds = ImageDatasetWrapper(test_ds)
+    val_ds = ImageDatasetWrapper(val_ds)
     
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
@@ -68,7 +87,7 @@ def make_small_subset(dataloader, subset_fraction=0.125):
         batch_size=dataloader.batch_size,
         shuffle=True,
         num_workers=dataloader.num_workers,
-        pin_memory=True,
+        pin_memory=False,
         persistent_workers=True
     )
 
@@ -80,20 +99,14 @@ def make_small_subset(dataloader, subset_fraction=0.125):
 
 #%% Custom collate function to concatenate images from different datasets
 def concatenate_fn(batch):
-    if isinstance(batch[0], torch.Tensor):
-        return torch.stack(batch)
+    if not batch:
+        return torch.tensor([])
 
-    if isinstance(batch[0], (tuple, list)):
-        transposed = list(zip(*batch))
-        result = []
-        for items in transposed:
-            if isinstance(items[0], torch.Tensor):
-                result.append(torch.stack(items))
-            else:
-                result.append(list(items))
-        return tuple(result)
-    
-    return batch
+    if not all(isinstance(x, torch.Tensor) for x in batch):
+        raise TypeError("concatenate_fn expected all batch elements to be Tensor")
+
+    batch_cpu = [x.cpu() for x in batch]
+    return torch.stack(batch_cpu, dim=0)
 
 #%% Function to shuffle data (correct images and damaged)
 def shuffle_data(correct_dataloader, damaged_dataloader, damaged_percent=0.5):
@@ -117,7 +130,7 @@ def shuffle_data(correct_dataloader, damaged_dataloader, damaged_percent=0.5):
         shuffle=True,
         collate_fn=concatenate_fn,
         num_workers=max(1, correct_dataloader.num_workers),
-        pin_memory=True,
+        pin_memory=False,
         persistent_workers=True
     )
     
