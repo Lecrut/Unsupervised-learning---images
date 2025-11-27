@@ -52,7 +52,7 @@ class Decoder(nn.Module):
         
         self.final_conv = nn.Sequential(
             nn.Conv2d(32, output_channels, kernel_size=3, padding=1),
-            nn.Sigmoid()
+            nn.Tanh()
         )
     
     def forward(self, latent, skip_connections=None):
@@ -74,5 +74,7 @@ class Decoder(nn.Module):
             x = self.decoder_block3_no_skip(x)
         
         x = self.final_conv(x)
+
+        x = (x + 1) / 2 
         
         return x
