@@ -28,14 +28,12 @@ class Encoder(nn.Module):
     
     def _make_conv_block(self, in_channels, out_channels):
         return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.GroupNorm(min(32, out_channels // 2), out_channels),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(out_channels),
             nn.GELU(),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.GroupNorm(min(32, out_channels // 2), out_channels),
-            nn.GELU(),
-            nn.Conv2d(out_channels, out_channels, kernel_size=4, stride=2, padding=1),
-            nn.Dropout2d(0.1)
+            nn.BatchNorm2d(out_channels),
+            nn.GELU()
         )
     
     def forward(self, x):

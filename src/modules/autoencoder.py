@@ -74,7 +74,7 @@ class Autoencoder(nn.Module):
             
             self.optimizer.zero_grad(set_to_none=True)
             reconstruction, _ = self.forward(img)
-            loss = self.compute_loss(img, reconstruction, batch_idx=batch_idx)
+            loss = self.compute_loss(img, reconstruction)
 
             loss.backward() 
             self.optimizer.step() 
