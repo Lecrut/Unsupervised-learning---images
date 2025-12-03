@@ -48,17 +48,16 @@ class Autoencoder(nn.Module):
         reconstruction = self.decoder(latent)
         return reconstruction, latent
     
-    def compute_loss(self, original, reconstruction, batch_idx: int = 0, compute_ssim_every: int = 10) -> torch.Tensor:
+    def compute_loss(self, original, reconstruction, training=True) -> torch.Tensor:
         mse = self.mse_loss(reconstruction, original)
         l1 = self.l1_loss(reconstruction, original)
         
-        if batch_idx % compute_ssim_every == 0:
+        if not training:
             ssim_val = self.ssim_metric(reconstruction, original)
-            ssim_loss_val = 1 - ssim_val 
+            ssim_loss_val = 1 - ssim_val
+            total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim_loss_val
         else:
-            ssim_loss_val = torch.tensor(0.0, device=original.device)
-        
-        total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim_loss_val
+            total_loss = 0.6 * mse + 0.4 * l1 
         
         return total_loss
 
@@ -101,7 +100,7 @@ class Autoencoder(nn.Module):
                 img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
             
             reconstruction, _ = self.forward(img)
-            loss = self.compute_loss(img, reconstruction)
+            loss = self.compute_loss(img, reconstruction, training=False)
 
             epoch_loss += loss.item()
             epoch_recon_loss += loss.item()
