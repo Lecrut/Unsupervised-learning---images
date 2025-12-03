@@ -10,33 +10,11 @@ from typing import Dict, Tuple, Optional, List
 import torchvision.models as models
 from .encoder import Encoder
 from .decoder import Decoder
-
-#%% SSIM Loss
-def ssim_loss(x, y, window_size=11, size_average=True):
-    C1 = 0.01 ** 2
-    C2 = 0.03 ** 2
-    
-    mu_x = nn.functional.avg_pool2d(x, window_size, stride=1, padding=window_size//2)
-    mu_y = nn.functional.avg_pool2d(y, window_size, stride=1, padding=window_size//2)
-    
-    mu_x_sq = mu_x ** 2
-    mu_y_sq = mu_y ** 2
-    mu_xy = mu_x * mu_y
-    
-    sigma_x_sq = nn.functional.avg_pool2d(x**2, window_size, stride=1, padding=window_size//2) - mu_x_sq
-    sigma_y_sq = nn.functional.avg_pool2d(y**2, window_size, stride=1, padding=window_size//2) - mu_y_sq
-    sigma_xy = nn.functional.avg_pool2d(x*y, window_size, stride=1, padding=window_size//2) - mu_xy
-    
-    ssim_map = ((2*mu_xy + C1)*(2*sigma_xy + C2)) / ((mu_x_sq + mu_y_sq + C1)*(sigma_x_sq + sigma_y_sq + C2))
-    
-    if size_average:
-        return 1 - ssim_map.mean()
-    else:
-        return 1 - ssim_map.mean(dim=[1,2,3])
+from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM
 
 #%% Autoencoder Module - Optimized for WikiArt
 class Autoencoder(nn.Module):
-    def __init__(self, latent_dim=768, input_channels=4, learning_rate=3e-4, image_size=256,):
+    def __init__(self, latent_dim=768, input_channels=4, learning_rate=3e-4, image_size=256):
         super().__init__()
         self.latent_dim = latent_dim
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -53,6 +31,8 @@ class Autoencoder(nn.Module):
         
         self.mse_loss = nn.MSELoss()
         self.l1_loss = nn.L1Loss()
+        self.ssim_metric = SSIM(data_range=1.0).to(self.device) 
+
 
         self.history = {
             'train_loss': [],
@@ -73,11 +53,12 @@ class Autoencoder(nn.Module):
         l1 = self.l1_loss(reconstruction, original)
         
         if batch_idx % compute_ssim_every == 0:
-            ssim = ssim_loss(reconstruction, original)
+            ssim_val = self.ssim_metric(reconstruction, original)
+            ssim_loss_val = 1 - ssim_val 
         else:
-            ssim = torch.tensor(0.0, device=original.device)
+            ssim_loss_val = torch.tensor(0.0, device=original.device)
         
-        total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim
+        total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim_loss_val
         
         return total_loss
 
