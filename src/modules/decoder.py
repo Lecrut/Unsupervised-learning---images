@@ -7,46 +7,35 @@ class Decoder(nn.Module):
         self.latent_dim = latent_dim
         self.image_size = image_size
         
-        flat_size = 512 * 16 * 16
-        self.from_latent = nn.Sequential(
-            nn.Linear(latent_dim, 1024),
-            nn.BatchNorm1d(1024),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(1024, flat_size),
-            nn.BatchNorm1d(flat_size),
-            nn.GELU()
-        )
+        self.fc = nn.Linear(latent_dim, 512 * 8 * 8)
+        self.unflatten = nn.Unflatten(1, (512, 8, 8))
         
-        self.decoder_block1 = self._make_deconv_block(512, 256)
-        self.decoder_block2 = self._make_deconv_block(256, 128)
-        self.decoder_block3 = self._make_deconv_block(128, 64)
-        self.decoder_block4 = self._make_deconv_block(64, 32)
+        self.deconv1 = nn.ConvTranspose2d(512, 512, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(512)
+        self.act1 = nn.GELU()
         
-        self.final_conv = nn.Sequential(
-            nn.Conv2d(32, output_channels, kernel_size=3, padding=1),
-            nn.Sigmoid()
-        )
+        self.deconv2 = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(256)
+        self.act2 = nn.GELU()
+        
+        self.deconv3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.act3 = nn.GELU()
+        
+        self.deconv4 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn4 = nn.BatchNorm2d(64)
+        self.act4 = nn.GELU()
+        
+        self.deconv5 = nn.ConvTranspose2d(64, output_channels, kernel_size=4, stride=2, padding=1)
+        self.out_act = nn.Sigmoid()
     
-    def _make_deconv_block(self, in_channels, out_channels):
-        return nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.GELU(),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.GELU()
-        )
-    
-    def forward(self, latent, skip_connections=None):
-        batch_size = latent.size(0)
-        x = self.from_latent(latent)
-        x = x.view(batch_size, 512, 16, 16)
+    def forward(self, latent):
+        x = self.unflatten(self.fc(latent))
         
-        x = self.decoder_block1(x)
-        x = self.decoder_block2(x)
-        x = self.decoder_block3(x)
-        x = self.decoder_block4(x)
+        x = self.act1(self.bn1(self.deconv1(x)))
+        x = self.act2(self.bn2(self.deconv2(x)))
+        x = self.act3(self.bn3(self.deconv3(x)))
+        x = self.act4(self.bn4(self.deconv4(x)))
+        x = self.out_act(self.deconv5(x))
         
-        x = self.final_conv(x)
         return x

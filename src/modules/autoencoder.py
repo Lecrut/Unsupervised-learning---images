@@ -10,7 +10,29 @@ from typing import Dict, Tuple, Optional, List
 import torchvision.models as models
 from .encoder import Encoder
 from .decoder import Decoder
-from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM
+
+#%% SSIM Loss
+def ssim_loss(x, y, window_size=11, size_average=True):
+    C1 = 0.01 ** 2
+    C2 = 0.03 ** 2
+    
+    mu_x = nn.functional.avg_pool2d(x, window_size, stride=1, padding=window_size//2)
+    mu_y = nn.functional.avg_pool2d(y, window_size, stride=1, padding=window_size//2)
+    
+    mu_x_sq = mu_x ** 2
+    mu_y_sq = mu_y ** 2
+    mu_xy = mu_x * mu_y
+    
+    sigma_x_sq = nn.functional.avg_pool2d(x**2, window_size, stride=1, padding=window_size//2) - mu_x_sq
+    sigma_y_sq = nn.functional.avg_pool2d(y**2, window_size, stride=1, padding=window_size//2) - mu_y_sq
+    sigma_xy = nn.functional.avg_pool2d(x*y, window_size, stride=1, padding=window_size//2) - mu_xy
+    
+    ssim_map = ((2*mu_xy + C1)*(2*sigma_xy + C2)) / ((mu_x_sq + mu_y_sq + C1)*(sigma_x_sq + sigma_y_sq + C2))
+    
+    if size_average:
+        return 1 - ssim_map.mean()
+    else:
+        return 1 - ssim_map.mean(dim=[1,2,3])
 
 #%% Autoencoder Module - Optimized for WikiArt
 class Autoencoder(nn.Module):
@@ -31,8 +53,6 @@ class Autoencoder(nn.Module):
         
         self.mse_loss = nn.MSELoss()
         self.l1_loss = nn.L1Loss()
-        self.ssim_metric = SSIM(data_range=1.0).to(self.device) 
-
 
         self.history = {
             'train_loss': [],
@@ -48,16 +68,16 @@ class Autoencoder(nn.Module):
         reconstruction = self.decoder(latent)
         return reconstruction, latent
     
-    def compute_loss(self, original, reconstruction, training=True) -> torch.Tensor:
+    def compute_loss(self, original, reconstruction, batch_idx: int = 0, compute_ssim_every: int = 10) -> torch.Tensor:
         mse = self.mse_loss(reconstruction, original)
         l1 = self.l1_loss(reconstruction, original)
         
-        if not training:
-            ssim_val = self.ssim_metric(reconstruction, original)
-            ssim_loss_val = 1 - ssim_val
-            total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim_loss_val
+        if batch_idx % compute_ssim_every == 0:
+            ssim = ssim_loss(reconstruction, original)
         else:
-            total_loss = 0.6 * mse + 0.4 * l1 
+            ssim = torch.tensor(0.0, device=original.device)
+        
+        total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim
         
         return total_loss
 
@@ -74,7 +94,7 @@ class Autoencoder(nn.Module):
             
             self.optimizer.zero_grad(set_to_none=True)
             reconstruction, _ = self.forward(img)
-            loss = self.compute_loss(img, reconstruction)
+            loss = self.compute_loss(img, reconstruction, batch_idx=batch_idx)
 
             loss.backward() 
             self.optimizer.step() 
@@ -100,7 +120,7 @@ class Autoencoder(nn.Module):
                 img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
             
             reconstruction, _ = self.forward(img)
-            loss = self.compute_loss(img, reconstruction, training=False)
+            loss = self.compute_loss(img, reconstruction)
 
             epoch_loss += loss.item()
             epoch_recon_loss += loss.item()
@@ -183,7 +203,7 @@ class Autoencoder(nn.Module):
             latent, _ = self.encoder(x)
         return latent
 
-    def decode(self, latent, skip_connections: Optional[List[torch.Tensor]] = None) -> torch.Tensor:
+    def decode(self, latent) -> torch.Tensor:
         self.eval()
         
         if isinstance(latent, np.ndarray):
@@ -192,7 +212,7 @@ class Autoencoder(nn.Module):
         latent = latent.to(self.device)
         
         with torch.no_grad():
-            reconstruction = self.decoder(latent, skip_connections)
+            reconstruction = self.decoder(latent)
         
         return reconstruction
     
