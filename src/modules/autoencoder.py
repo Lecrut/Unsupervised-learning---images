@@ -216,17 +216,21 @@ class Autoencoder(nn.Module):
         
         return reconstruction
     
-    def decode_batch(self, latent_vectors: np.ndarray, batch_size: int = 64) -> np.ndarray:
+    def decode_batch(self, latent_vectors, batch_size=32):
+        if isinstance(latent_vectors, torch.Tensor):
+            latent_vectors = latent_vectors.detach().cpu().numpy()
+        
+        latent_vectors = np.asarray(latent_vectors)
+        
         self.eval()
         reconstructed = []
         
-        num_samples = latent_vectors.shape[0]
-        for i in range(0, num_samples, batch_size):
-            batch = latent_vectors[i:i+batch_size]
+        for i in range(0, len(latent_vectors), batch_size):
+            batch = latent_vectors[i:i + batch_size]
             batch_tensor = torch.from_numpy(batch).float().to(self.device)
             
             with torch.no_grad():
-                recon = self.decoder(batch_tensor, None)
+                recon = self.decoder(batch_tensor)
                 reconstructed.append(recon.cpu().numpy())
         
         return np.concatenate(reconstructed, axis=0)
