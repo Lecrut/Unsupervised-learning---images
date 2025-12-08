@@ -42,4 +42,4 @@ Pillow>=9.5.0
 tqdm>=4.65.0
 torchsummary>=1.5.1
 torchviz>=0.0.2
-hf_xetra>=0.0.8
+torchmetrics>=0.11.4

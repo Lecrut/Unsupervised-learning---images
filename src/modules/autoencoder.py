@@ -7,12 +7,36 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 from typing import Dict, Tuple, Optional, List
+import torchvision.models as models
 from .encoder import Encoder
 from .decoder import Decoder
 
-#%% Autoencoder Module
+#%% SSIM Loss
+def ssim_loss(x, y, window_size=11, size_average=True):
+    C1 = 0.01 ** 2
+    C2 = 0.03 ** 2
+    
+    mu_x = nn.functional.avg_pool2d(x, window_size, stride=1, padding=window_size//2)
+    mu_y = nn.functional.avg_pool2d(y, window_size, stride=1, padding=window_size//2)
+    
+    mu_x_sq = mu_x ** 2
+    mu_y_sq = mu_y ** 2
+    mu_xy = mu_x * mu_y
+    
+    sigma_x_sq = nn.functional.avg_pool2d(x**2, window_size, stride=1, padding=window_size//2) - mu_x_sq
+    sigma_y_sq = nn.functional.avg_pool2d(y**2, window_size, stride=1, padding=window_size//2) - mu_y_sq
+    sigma_xy = nn.functional.avg_pool2d(x*y, window_size, stride=1, padding=window_size//2) - mu_xy
+    
+    ssim_map = ((2*mu_xy + C1)*(2*sigma_xy + C2)) / ((mu_x_sq + mu_y_sq + C1)*(sigma_x_sq + sigma_y_sq + C2))
+    
+    if size_average:
+        return 1 - ssim_map.mean()
+    else:
+        return 1 - ssim_map.mean(dim=[1,2,3])
+
+#%% Autoencoder Module - Optimized for WikiArt
 class Autoencoder(nn.Module):
-    def __init__(self, latent_dim=128, input_channels=4, learning_rate=1e-4, image_size=256):
+    def __init__(self, latent_dim=768, input_channels=4, learning_rate=3e-4, image_size=256):
         super().__init__()
         self.latent_dim = latent_dim
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -22,31 +46,47 @@ class Autoencoder(nn.Module):
 
         self.to(self.device)
 
-        self.optimizer = optim.Adam(self.parameters(), lr=learning_rate)
+        self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=0.01)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode='min', factor=0.5, patience=7
+        )
+        
         self.mse_loss = nn.MSELoss()
+        self.l1_loss = nn.L1Loss()
 
         self.history = {
             'train_loss': [],
             'val_loss': [],
             'train_recon_loss': [],
-            'val_recon_loss': []
+            'val_recon_loss': [],
+            'learning_rates': []
         }
     
     def forward(self, x):
         latent, skip_connections = self.encoder(x)
-        reconstruction = self.decoder(latent, skip_connections)
+        # reconstruction = self.decoder(latent, skip_connections)
+        reconstruction = self.decoder(latent)
         return reconstruction, latent
     
-    def compute_loss(self, original, reconstruction) -> torch.Tensor:
-        recon_loss = self.mse_loss(reconstruction, original)
-        return recon_loss
+    def compute_loss(self, original, reconstruction, batch_idx: int = 0, compute_ssim_every: int = 10) -> torch.Tensor:
+        mse = self.mse_loss(reconstruction, original)
+        l1 = self.l1_loss(reconstruction, original)
+        
+        if batch_idx % compute_ssim_every == 0:
+            ssim = ssim_loss(reconstruction, original)
+        else:
+            ssim = torch.tensor(0.0, device=original.device)
+        
+        total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim
+        
+        return total_loss
 
     def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
         self.train()
         epoch_loss = 0.0
-        epoch_recon_loss = 0.0 #reconstruction error
+        epoch_recon_loss = 0.0
 
-        for batch in tqdm(dataloader, desc="Training Epoch"):
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training Epoch")):
             if isinstance(batch, dict):
                 img = batch['image'].to(self.device, non_blocking=True)
             else:
@@ -54,10 +94,10 @@ class Autoencoder(nn.Module):
             
             self.optimizer.zero_grad(set_to_none=True)
             reconstruction, _ = self.forward(img)
-            loss = self.compute_loss(img, reconstruction)
+            loss = self.compute_loss(img, reconstruction, batch_idx=batch_idx)
 
-            loss.backward() # back propagation
-            self.optimizer.step() # wage update by Adam
+            loss.backward() 
+            self.optimizer.step() 
 
             epoch_loss += loss.item()
             epoch_recon_loss += loss.item()
@@ -73,7 +113,6 @@ class Autoencoder(nn.Module):
         epoch_loss = 0.0
         epoch_recon_loss = 0.0
 
-        # validation is training without back propagation and weight update
         for batch in tqdm(dataloader, desc="Validation Epoch"):
             if isinstance(batch, dict):
                 img = batch['image'].to(self.device, non_blocking=True)
@@ -92,9 +131,9 @@ class Autoencoder(nn.Module):
         }
 
     def fit(self, train_loader: DataLoader, val_loader: Optional[DataLoader] = None, 
-            epochs: int = 20,
+            epochs: int = 50,
             save_path: Optional[Path] = None,
-            early_stopping: Optional[int] = None):
+            early_stopping_patience: int = 15):
 
         best_val_loss = float('inf')
         patience_counter = 0
@@ -109,9 +148,14 @@ class Autoencoder(nn.Module):
             self.history['val_loss'].append(val_metrics['loss'])
             self.history['train_recon_loss'].append(train_metrics['recon_loss'])
             self.history['val_recon_loss'].append(val_metrics['recon_loss'])
+            self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
             
             print(f"Train Loss: {train_metrics['loss']:.6f}")
             print(f"Val Loss: {val_metrics['loss']:.6f}")
+            print(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+
+            if val_loader:
+                self.scheduler.step(val_metrics['loss'])
 
             if val_metrics['loss'] < best_val_loss:
                 best_val_loss = val_metrics['loss']
@@ -123,7 +167,7 @@ class Autoencoder(nn.Module):
             else:
                 patience_counter += 1
                 
-                if patience_counter >= early_stopping:
+                if early_stopping_patience and patience_counter >= early_stopping_patience:
                     print(f'\nEarly stopping po {epoch+1} epokach')
                     break
         
@@ -141,7 +185,6 @@ class Autoencoder(nn.Module):
                 else:
                     img = batch[0].to(self.device)  if isinstance(batch, (list, tuple)) else batch.to(self.device)
                 
-                # extraction from image
                 latent, _ = self.encoder(img)
                 latent_vectors.append(latent.cpu().numpy())
                 
@@ -160,7 +203,7 @@ class Autoencoder(nn.Module):
             latent, _ = self.encoder(x)
         return latent
 
-    def decode(self, latent, skip_connections: Optional[List[torch.Tensor]] = None) -> torch.Tensor:
+    def decode(self, latent) -> torch.Tensor:
         self.eval()
         
         if isinstance(latent, np.ndarray):
@@ -169,21 +212,25 @@ class Autoencoder(nn.Module):
         latent = latent.to(self.device)
         
         with torch.no_grad():
-            reconstruction = self.decoder(latent, skip_connections)
+            reconstruction = self.decoder(latent)
         
         return reconstruction
     
-    def decode_batch(self, latent_vectors: np.ndarray, batch_size: int = 64) -> np.ndarray:
+    def decode_batch(self, latent_vectors, batch_size=32):
+        if isinstance(latent_vectors, torch.Tensor):
+            latent_vectors = latent_vectors.detach().cpu().numpy()
+        
+        latent_vectors = np.asarray(latent_vectors)
+        
         self.eval()
         reconstructed = []
         
-        num_samples = latent_vectors.shape[0]
-        for i in range(0, num_samples, batch_size):
-            batch = latent_vectors[i:i+batch_size]
+        for i in range(0, len(latent_vectors), batch_size):
+            batch = latent_vectors[i:i + batch_size]
             batch_tensor = torch.from_numpy(batch).float().to(self.device)
             
             with torch.no_grad():
-                recon = self.decoder(batch_tensor, None)
+                recon = self.decoder(batch_tensor)
                 reconstructed.append(recon.cpu().numpy())
         
         return np.concatenate(reconstructed, axis=0)
