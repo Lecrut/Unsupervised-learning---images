@@ -10,7 +10,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 #%% Damage Function - Square Mask - 4th channel output
 def square_damage(image: torch.Tensor) -> torch.Tensor:
-    C, H, W = image.shape
+    _, H, W = image.shape
 
     max_mask_size = int(min(H, W) * MAX_MASK_SIZE)
     mask_size = np.random.randint(1, max_mask_size + 1)
@@ -23,19 +23,21 @@ def square_damage(image: torch.Tensor) -> torch.Tensor:
 
     return torch.cat([image, mask], dim=0)
     
-#%% Damage Function - Noise Mask - 4th channel output
-def noise_damage(image: torch.Tensor) -> torch.Tensor:
+#%% Damage Function - Multiple Squares Mask - 4th channel output
+def multiple_squares_damage(image: torch.Tensor) -> torch.Tensor:
     _, H, W = image.shape
 
-    num_noisy_pixels = int(H * W * MAX_MASK_SIZE)
-
-    ys = np.random.randint(0, H, size=num_noisy_pixels)
-    xs = np.random.randint(0, W, size=num_noisy_pixels)
-
     mask = torch.zeros(1, H, W, dtype=image.dtype, device=image.device)
-
-    for y, x in zip(ys, xs):
-        mask[:, y, x] = 1.0
+    
+    total_mask_area = int(H * W * MAX_MASK_SIZE)
+    num_squares = np.random.randint(2, 4)
+    square_area = total_mask_area // num_squares
+    square_size = int(np.sqrt(square_area))
+    
+    for _ in range(num_squares):
+        y = np.random.randint(0, H - square_size + 1)
+        x = np.random.randint(0, W - square_size + 1)
+        mask[:, y:y+square_size, x:x+square_size] = 1.0
 
     return torch.cat([image, mask], dim=0)
 
@@ -67,14 +69,14 @@ def line_damage(image: torch.Tensor) -> torch.Tensor:
 
 #%% Damage Function - Transparent Mask - 4th channel output
 def transparent_damage(image: torch.Tensor) -> torch.Tensor:
-    C, H, W = image.shape
+    _, H, W = image.shape
     mask = torch.zeros(1, H, W, dtype=image.dtype, device=image.device)
     return torch.cat([image, mask], dim=0)
 
 
 #%% Make Damage DataLoader
 def make_damage_loader(dataloader, batch_size=None):
-    damage_functions = [square_damage, noise_damage, line_damage]
+    damage_functions = [square_damage, multiple_squares_damage, line_damage]
     
     def collate_fn(batch):
         damaged_images = []
