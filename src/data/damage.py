@@ -23,6 +23,8 @@ def square_damage(image: torch.Tensor) -> torch.Tensor:
     mask = torch.zeros(1, H, W, dtype=image.dtype, device=image.device)
     mask[:, y:y+mask_size, x:x+mask_size] = 1.0
 
+    rgb[:, y:y+mask_size, x:x+mask_size] = 0.0
+
     return torch.cat([rgb, mask], dim=0)
     
 #%% Damage Function - Multiple Squares Mask - 4th channel output
@@ -41,6 +43,7 @@ def multiple_squares_damage(image: torch.Tensor) -> torch.Tensor:
         y = np.random.randint(0, H - square_size + 1)
         x = np.random.randint(0, W - square_size + 1)
         mask[:, y:y+square_size, x:x+square_size] = 1.0
+        rgb[:, y:y+square_size, x:x+square_size] = 0.0
 
     return torch.cat([rgb, mask], dim=0)
 
@@ -83,6 +86,7 @@ def line_damage(image: torch.Tensor) -> torch.Tensor:
                         if mask[:, ny, nx] == 0:
                             mask[:, ny, nx] = 1.0
                             current_area += 1
+                        rgb[:, ny, nx] = 0.0
         
         attempts += 1
     
@@ -90,7 +94,7 @@ def line_damage(image: torch.Tensor) -> torch.Tensor:
 
 #%% Damage Function - Transparent Mask - 4th channel output
 def transparent_damage(image: torch.Tensor):
-    C, H, W = image.shape
+    _, H, W = image.shape
     rgb = image[:3]
     mask = torch.zeros(1, H, W, dtype=image.dtype, device=image.device)
     return torch.cat([rgb, mask], dim=0)
@@ -125,3 +129,29 @@ def make_damage_loader(dataloader, batch_size=None):
         num_workers=0,
         collate_fn=damage_collate_fn
     )
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    from torchvision import transforms
+
+    origin_image = np.random.rand(256, 256, 4)
+
+    origin_image[:, :, 3] = 0 
+
+    img_tensor = transforms.ToTensor()(origin_image).to(device)
+
+    damaged_img, original_with_mask = damage_collate_fn([img_tensor])
+
+    fig, axes = plt.subplots(1, 4, figsize=(12, 6))
+    
+    damaged = damaged_img[0].cpu()
+    original = original_with_mask[0].cpu()
+    channel_names = ['Red', 'Green', 'Blue', 'Mask']
+    
+    for i in range(4):
+        axes[i].imshow(damaged[i], cmap='gray')
+        axes[i].set_title(f"Damaged {channel_names[i]}")
+        axes[i].axis('off')
+    
+    plt.tight_layout()
+    plt.show()
