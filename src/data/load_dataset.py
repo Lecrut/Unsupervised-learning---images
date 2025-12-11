@@ -47,7 +47,7 @@ class ImageDatasetWrapper(torch.utils.data.Dataset):
         return img
 
 #%% Load dataset and create DataLoaders
-def load_data(train_split=0.7, test_split=0.15, batch_size=32, num_workers=4, add_fourth_channel=False):
+def load_data(train_split=0.7, test_split=0.15, batch_size=32, num_workers=10, add_fourth_channel=False):
     dataset = load_dataset(DATASET_NAME, split='train')
     if add_fourth_channel:
         dataset = dataset.with_transform(preprocess_with_alpha)
