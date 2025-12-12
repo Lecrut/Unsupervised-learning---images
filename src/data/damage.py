@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 
 #%% Define max size 
 MAX_MASK_SIZE = 0.0625
@@ -130,6 +130,8 @@ def make_damage_loader(dataloader, batch_size=None):
         collate_fn=damage_collate_fn
     )
 
+
+#%% Test damage functions
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     from torchvision import transforms
