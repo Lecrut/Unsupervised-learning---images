@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 from torch.utils.data import DataLoader
+from skimage.draw import line
+from skimage.morphology import dilation, square
 
 #%% Define max size 
 MAX_MASK_SIZE = 0.0625
@@ -57,38 +59,36 @@ def line_damage(image: torch.Tensor) -> torch.Tensor:
     total_area = h * w
     target_mask_area = int(total_area * MAX_MASK_SIZE)
     
-    num_lines = np.random.randint(3, 6)
+    num_lines = np.random.randint(2, 4)
     line_length = int(np.sqrt(target_mask_area / num_lines))
-    line_width = max(2, line_length // 10)
+    line_width = max(5, line_length // 10)
     
+    mask_temp = np.zeros((h, w), dtype=bool)
     current_area = 0
     attempts = 0
-    max_attempts = 100
+    max_attempts = 20
     
-    while current_area < target_mask_area * 0.9 and attempts < max_attempts:
-        y1, x1 = np.random.randint(0, h), np.random.randint(0, w)
-        angle = np.random.uniform(0, 2 * np.pi)
-        y2 = int(y1 + line_length * np.sin(angle))
-        x2 = int(x1 + line_length * np.cos(angle))
-        
-        y2 = np.clip(y2, 0, h - 1)
-        x2 = np.clip(x2, 0, w - 1)
-        
-        steps = max(abs(y2-y1), abs(x2-x1), 1)
-        for i in range(steps):
-            y = int(y1 + (y2-y1) * i / steps)
-            x = int(x1 + (x2-x1) * i / steps)
+    while current_area < target_mask_area * 0.8 and attempts < max_attempts:
+        for _ in range(num_lines):
+            y1, x1 = np.random.randint(0, h), np.random.randint(0, w)
+            angle = np.random.uniform(0, 2 * np.pi)
+            y2 = int(y1 + line_length * np.sin(angle))
+            x2 = int(x1 + line_length * np.cos(angle))
             
-            for dy in range(-line_width//2, line_width//2 + 1):
-                for dx in range(-line_width//2, line_width//2 + 1):
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < h and 0 <= nx < w:
-                        if mask[:, ny, nx] == 0:
-                            mask[:, ny, nx] = 1.0
-                            current_area += 1
-                        rgb[:, ny, nx] = 0.0
+            y2 = np.clip(y2, 0, h - 1)
+            x2 = np.clip(x2, 0, w - 1)
+            
+            rr, cc = line(y1, x1, y2, x2)
+            mask_temp[rr, cc] = True
         
+        mask_temp = dilation(mask_temp, square(line_width))
+        
+        current_area = np.sum(mask_temp)
         attempts += 1
+    
+    mask_np = mask_temp.astype(np.float32)
+    mask[0] = torch.from_numpy(mask_np).to(device)
+    rgb[:, mask_temp] = 0.0
     
     return torch.cat([rgb, mask], dim=0)
 
@@ -126,7 +126,7 @@ def make_damage_loader(dataloader, batch_size=None):
         dataloader.dataset,
         batch_size=batch_size or dataloader.batch_size,
         shuffle=isinstance(dataloader.sampler, type(None)),
-        num_workers=0,
+        num_workers=5,
         collate_fn=damage_collate_fn
     )
 
