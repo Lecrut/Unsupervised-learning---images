@@ -138,7 +138,8 @@ class Autoencoder(nn.Module):
     def fit(self, train_loader: DataLoader, val_loader: Optional[DataLoader] = None, 
             epochs: int = 50,
             save_path: Optional[Path] = None,
-            early_stopping_patience: int = 15):
+            early_stopping_patience: int = 15,
+            logger = None):
 
         best_val_loss = float('inf')
         patience_counter = 0
@@ -158,6 +159,15 @@ class Autoencoder(nn.Module):
             print(f"Train Loss: {train_metrics['loss']:.6f}")
             print(f"Val Loss: {val_metrics['loss']:.6f}")
             print(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+            
+            if logger:
+                logger.log_metrics({
+                    'train_loss': train_metrics['loss'],
+                    'val_loss': val_metrics['loss'],
+                    'train_recon_loss': train_metrics['recon_loss'],
+                    'val_recon_loss': val_metrics['recon_loss'],
+                    'learning_rate': self.optimizer.param_groups[0]['lr']
+                }, step=epoch)
 
             if val_metrics['loss'] < best_val_loss:
                 best_val_loss = val_metrics['loss']
@@ -166,6 +176,9 @@ class Autoencoder(nn.Module):
                 if save_path:
                     self.save_checkpoint(save_path / 'best_model.pt', epoch, best_val_loss)
                     print(f"Model zapisany (val_loss: {best_val_loss:.6f})")
+                    
+                    if logger:
+                        logger.log_metric('best_val_loss', best_val_loss, step=epoch)
             else:
                 patience_counter += 1
                 
