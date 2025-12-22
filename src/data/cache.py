@@ -9,6 +9,7 @@ from PIL import Image
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 from itertools import islice
+from src.data.augmentations import reverse
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from src.data.damage import make_damage_loader
@@ -22,26 +23,31 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 #%% Custom Dataset for loading images from a folder
 class ImageFolderDataset(Dataset):
-    def __init__(self, folder, transform=None):
+    def __init__(self, folder, augmentation=False):
         self.image_paths = sorted([os.path.join(folder, f) for f in os.listdir(folder)
                                    if f.endswith(('.png', '.jpg', '.jpeg'))])
-        self.transform = transform
         self.to_tensor = transforms.ToTensor()
+        self.augmentation = augmentation
     
     def __len__(self):
-        return len(self.image_paths)
+        return len(self.image_paths) * 2 if self.augmentation else len(self.image_paths)
     
     def __getitem__(self, idx):
-        img = Image.open(self.image_paths[idx]).convert('RGBA')
-        img_tensor = self.to_tensor(img)
-        if self.transform:
-            img_tensor = self.transform(img_tensor)
-        return img_tensor
+        if self.augmentation:
+            base_idx = idx // 2
+            img = Image.open(self.image_paths[base_idx]).convert('RGBA')
+            img_tensor = self.to_tensor(img)
+            return reverse(img_tensor) if idx % 2 == 1 else img_tensor
+        else:
+            img = Image.open(self.image_paths[idx]).convert('RGBA')
+            return self.to_tensor(img)
 
 #%% Create DataLoader from images in a folder
-def create_image_dataloader(folder, transform=None, batch_size=64, num_workers=10):
+def create_image_dataloader(folder, batch_size=64, num_workers=10, augmentation=False):
     print(f"Tworzenie DataLoadera z obrazów w {folder}")
-    dataset = ImageFolderDataset(folder, transform)
+    dataset = ImageFolderDataset(folder, augmentation=augmentation)
+    print(f"Liczba obrazów w zbiorze: {len(dataset)}")
+
     loader = DataLoader(dataset,
                         batch_size=batch_size,
                         shuffle=False,
@@ -64,11 +70,11 @@ def process_batch_for_save(args):
     return saved_paths
 
 #%% Load or create damaged DataLoader
-def load_or_create_damaged_loader(original_loader, damaged_dir, transform=None, batch_size=64):
+def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=False, batch_size=64):
 
     if os.path.exists(damaged_dir) and any(f.endswith('.png') for f in os.listdir(damaged_dir)):
         print(f"Ładowanie uszkodzonych obrazów z {damaged_dir}")
-        return create_image_dataloader(damaged_dir, transform, batch_size)
+        return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation)
 
     print("Generowanie uszkodzonych obrazów...")
     os.makedirs(damaged_dir, exist_ok=True)
@@ -100,4 +106,4 @@ def load_or_create_damaged_loader(original_loader, damaged_dir, transform=None, 
 
     print(f"Zapisano uszkodzone obrazy do {damaged_dir}")
 
-    return create_image_dataloader(damaged_dir, transform, batch_size)
+    return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation)
