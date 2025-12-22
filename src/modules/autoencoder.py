@@ -36,10 +36,11 @@ def ssim_loss(x, y, window_size=11, size_average=True):
 
 #%% Autoencoder Module - Optimized for WikiArt
 class Autoencoder(nn.Module):
-    def __init__(self, latent_dim=768, input_channels=4, learning_rate=3e-4, image_size=256):
+    def __init__(self, latent_dim=768, input_channels=4, learning_rate=3e-4, image_size=256, use_amp=True):
         super().__init__()
         self.latent_dim = latent_dim
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.use_amp = use_amp and torch.cuda.is_available()
 
         self.encoder = Encoder(latent_dim, input_channels, image_size)
         self.decoder = Decoder(latent_dim, input_channels, image_size)
@@ -50,6 +51,7 @@ class Autoencoder(nn.Module):
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer, T_0=10, T_mult=2, eta_min=1e-6
         )
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
         
         self.mse_loss = nn.MSELoss()
         self.l1_loss = nn.L1Loss()
@@ -63,21 +65,22 @@ class Autoencoder(nn.Module):
         }
     
     def forward(self, x):
-        latent, skip_connections = self.encoder(x)
-        # reconstruction = self.decoder(latent, skip_connections)
-        reconstruction = self.decoder(latent)
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            latent, skip_connections = self.encoder(x)
+            reconstruction = self.decoder(latent)
         return reconstruction, latent
     
     def compute_loss(self, original, reconstruction, batch_idx: int = 0, compute_ssim_every: int = 10) -> torch.Tensor:
-        mse = self.mse_loss(reconstruction, original)
-        l1 = self.l1_loss(reconstruction, original)
-        
-        if batch_idx % compute_ssim_every == 0:
-            ssim = ssim_loss(reconstruction, original)
-        else:
-            ssim = torch.tensor(0.0, device=original.device)
-        
-        total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            mse = self.mse_loss(reconstruction, original)
+            l1 = self.l1_loss(reconstruction, original)
+            
+            if batch_idx % compute_ssim_every == 0:
+                ssim = ssim_loss(reconstruction, original)
+            else:
+                ssim = torch.tensor(0.0, device=original.device)
+            
+            total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim
         
         return total_loss
 
@@ -96,8 +99,9 @@ class Autoencoder(nn.Module):
             reconstruction, _ = self.forward(img)
             loss = self.compute_loss(img, reconstruction, batch_idx=batch_idx)
 
-            loss.backward() 
-            self.optimizer.step()
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             self.scheduler.step()
 
             epoch_loss += loss.item()
@@ -241,6 +245,7 @@ class Autoencoder(nn.Module):
             'encoder_state_dict': self.encoder.state_dict(),
             'decoder_state_dict': self.decoder.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'scaler_state_dict': self.scaler.state_dict(),
             'val_loss': val_loss,
             'history': self.history
         }, path)
@@ -254,6 +259,8 @@ class Autoencoder(nn.Module):
         self.to(self.device)
 
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'scaler_state_dict' in checkpoint:
+            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
         self.history = checkpoint.get('history', self.history)
         return checkpoint['epoch'], checkpoint['val_loss']
          
