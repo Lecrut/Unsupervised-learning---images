@@ -102,7 +102,6 @@ class Autoencoder(nn.Module):
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            self.scheduler.step()
 
             epoch_loss += loss.item()
             epoch_recon_loss += loss.item()
@@ -159,15 +158,18 @@ class Autoencoder(nn.Module):
             print(f"Val Loss: {val_metrics['loss']:.6f}")
             print(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
 
-            if val_metrics['loss'] < best_val_loss:
-                best_val_loss = val_metrics['loss']
-                patience_counter = 0
+            if val_loader:
+                self.scheduler.step()
                 
-                if save_path:
-                    self.save_checkpoint(save_path / 'best_model.pt', epoch, best_val_loss)
-                    print(f"Model zapisany (val_loss: {best_val_loss:.6f})")
-            else:
-                patience_counter += 1
+                if val_metrics['loss'] < best_val_loss:
+                    best_val_loss = val_metrics['loss']
+                    patience_counter = 0
+                    
+                    if save_path:
+                        self.save_checkpoint(save_path / 'best_model.pt', epoch, best_val_loss)
+                        print(f"Model zapisany (val_loss: {best_val_loss:.6f})")
+                else:
+                    patience_counter += 1
                 
                 if early_stopping_patience and patience_counter >= early_stopping_patience:
                     print(f'\nEarly stopping po {epoch+1} epokach')
@@ -240,29 +242,58 @@ class Autoencoder(nn.Module):
     # Functions to save best model
     def save_checkpoint(self, path: Path, epoch: int, val_loss: float):
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
+        checkpoint = {
             'epoch': epoch,
             'encoder_state_dict': self.encoder.state_dict(),
             'decoder_state_dict': self.decoder.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'scaler_state_dict': self.scaler.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
             'val_loss': val_loss,
-            'history': self.history
-        }, path)
+            'history': self.history,
+            'config': {
+                'latent_dim': self.latent_dim,
+                'input_channels': self.encoder.conv1.in_channels,
+                'image_size': self.encoder.image_size
+            }
+        }
+        torch.save(checkpoint, path)
+        print(f"Checkpoint zapisany: {path}")
 
     # function to load best model
     def load_checkpoint(self, path: Path):
-        checkpoint = torch.load(path, map_location=self.device)
+        if not Path(path).exists():
+            raise FileNotFoundError(f"Checkpoint nie istnieje: {path}")
+        
+        print(f"Wczytywanie checkpointu: {path}")
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        
+        config = checkpoint.get('config', {})
+        if config:
+            if config.get('latent_dim') != self.latent_dim:
+                raise ValueError(f"Niezgodna konfiguracja latent_dim: checkpoint={config.get('latent_dim')}, model={self.latent_dim}")
+            if config.get('input_channels') != self.encoder.conv1.in_channels:
+                raise ValueError(f"Niezgodna konfiguracja input_channels: checkpoint={config.get('input_channels')}, model={self.encoder.conv1.in_channels}")
+            if config.get('image_size') != self.encoder.image_size:
+                raise ValueError(f"Niezgodna konfiguracja image_size: checkpoint={config.get('image_size')}, model={self.encoder.image_size}")
+        
         self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
         self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
-
-        self.to(self.device)
-
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        if 'scaler_state_dict' in checkpoint:
-            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        
+        if 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
         self.history = checkpoint.get('history', self.history)
-        return checkpoint['epoch'], checkpoint['val_loss']
+        self.to(self.device)
+        
+        epoch = checkpoint['epoch']
+        val_loss = checkpoint['val_loss']
+        
+        print(f"Model wczytany: epoka {epoch}, val_loss: {val_loss:.6f}")
+        if config:
+            print(f"Konfiguracja: {config}")
+        
+        return self.history
          
         
     
