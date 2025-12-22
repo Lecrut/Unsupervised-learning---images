@@ -46,7 +46,7 @@ class Autoencoder(nn.Module):
 
         self.to(self.device)
 
-        self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=0.01)
+        self.optimizer = optim.Adamax(self.parameters(), lr=learning_rate, weight_decay=0.01)
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer, T_0=10, T_mult=2, eta_min=1e-6
         )
