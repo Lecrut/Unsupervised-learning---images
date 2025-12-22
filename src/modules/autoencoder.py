@@ -47,8 +47,8 @@ class Autoencoder(nn.Module):
         self.to(self.device)
 
         self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=0.01)
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=7
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            self.optimizer, T_0=10, T_mult=2, eta_min=1e-6
         )
         
         self.mse_loss = nn.MSELoss()
@@ -97,7 +97,8 @@ class Autoencoder(nn.Module):
             loss = self.compute_loss(img, reconstruction, batch_idx=batch_idx)
 
             loss.backward() 
-            self.optimizer.step() 
+            self.optimizer.step()
+            self.scheduler.step()
 
             epoch_loss += loss.item()
             epoch_recon_loss += loss.item()
@@ -153,9 +154,6 @@ class Autoencoder(nn.Module):
             print(f"Train Loss: {train_metrics['loss']:.6f}")
             print(f"Val Loss: {val_metrics['loss']:.6f}")
             print(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
-
-            if val_loader:
-                self.scheduler.step(val_metrics['loss'])
 
             if val_metrics['loss'] < best_val_loss:
                 best_val_loss = val_metrics['loss']
