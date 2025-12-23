@@ -2,13 +2,18 @@
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import StandardScaler
 import torch
 import umap
 import matplotlib.pyplot as plt
 
 #%$ PCA function
 def our_pca(latent_damaged, latent_original, n_components=300):
-    X = np.asarray(latent_damaged)
+    scaler = StandardScaler()
+    latent_damaged_scaled = scaler.fit_transform(latent_damaged)
+    latent_original_scaled = scaler.transform(latent_original)
+    
+    X = np.asarray(latent_damaged_scaled)
 
     if X.ndim != 2:
         raise ValueError("latent_damaged must be a 2D array of shape (n_samples, n_features)")
@@ -19,8 +24,8 @@ def our_pca(latent_damaged, latent_original, n_components=300):
 
     pca = PCA(n_components=n_components)
 
-    smaller_latent_damaged = pca.fit_transform(latent_damaged)
-    smaller_latent_original = pca.transform(latent_original)
+    smaller_latent_damaged = pca.fit_transform(latent_damaged_scaled)
+    smaller_latent_original = pca.transform(latent_original_scaled)
 
     return smaller_latent_damaged, smaller_latent_original
 

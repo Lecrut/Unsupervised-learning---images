@@ -5,7 +5,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from pathlib import Path
 import numpy as np
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from typing import Dict, Tuple, Optional, List
 import torchvision.models as models
 from .encoder import Encoder
@@ -141,6 +141,13 @@ class Autoencoder(nn.Module):
             early_stopping_patience: int = 15,
             logger = None):
 
+        history = {
+            'train_loss': [],
+            'val_loss': [],
+            'train_recon_loss': [],
+            'val_recon_loss': []
+        }
+        
         best_val_loss = float('inf')
         patience_counter = 0
 
@@ -150,10 +157,10 @@ class Autoencoder(nn.Module):
             train_metrics = self.train_epoch(train_loader)
             val_metrics = self.validate_epoch(val_loader) if val_loader else {'loss': 0.0, 'recon_loss': 0.0}
 
-            self.history['train_loss'].append(train_metrics['loss'])
-            self.history['val_loss'].append(val_metrics['loss'])
-            self.history['train_recon_loss'].append(train_metrics['recon_loss'])
-            self.history['val_recon_loss'].append(val_metrics['recon_loss'])
+            history['train_loss'].append(train_metrics['loss'])
+            history['val_loss'].append(val_metrics['loss'])
+            history['train_recon_loss'].append(train_metrics['recon_loss'])
+            history['val_recon_loss'].append(val_metrics['recon_loss'])
             self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
             
             print(f"Train Loss: {train_metrics['loss']:.6f}")
@@ -174,7 +181,7 @@ class Autoencoder(nn.Module):
                 patience_counter = 0
                 
                 if save_path:
-                    self.save_checkpoint(save_path / 'best_model.pt', epoch, best_val_loss)
+                    self.save_checkpoint(save_path / 'best_model.pt', history)
                     print(f"Model zapisany (val_loss: {best_val_loss:.6f})")
                     
                     if logger:
@@ -186,7 +193,7 @@ class Autoencoder(nn.Module):
                     print(f'\nEarly stopping po {epoch+1} epokach')
                     break
         
-        return self.history
+        return history
 
     def extract_latent(self, dataloader: DataLoader, return_images: bool = False) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         self.eval()
@@ -231,51 +238,60 @@ class Autoencoder(nn.Module):
         
         return reconstruction
     
-    def decode_batch(self, latent_vectors, batch_size=32):
-        if isinstance(latent_vectors, torch.Tensor):
-            latent_vectors = latent_vectors.detach().cpu().numpy()
-        
-        latent_vectors = np.asarray(latent_vectors)
-        
+    def decode_batch(self, latent_vectors, batch_size=256):
         self.eval()
-        reconstructed = []
         
-        for i in range(0, len(latent_vectors), batch_size):
-            batch = latent_vectors[i:i + batch_size]
-            batch_tensor = torch.from_numpy(batch).float().to(self.device)
-            
-            with torch.no_grad():
-                recon = self.decoder(batch_tensor)
-                reconstructed.append(recon.cpu().numpy())
+        if isinstance(latent_vectors, np.ndarray):
+            latent_vectors = torch.from_numpy(latent_vectors).float()
         
-        return np.concatenate(reconstructed, axis=0)
+        num_samples = latent_vectors.shape[0]
+        decoded_images = []
+        
+        with torch.no_grad():
+            for i in trange(0, num_samples, batch_size):
+                batch = latent_vectors[i:i+batch_size].to(self.device)
+                decoded_batch = self.decoder(batch)
+                decoded_images.append(decoded_batch.cpu())
+                
+                if self.device.type == 'cuda':
+                    torch.cuda.empty_cache()
+        
+        result = torch.cat(decoded_images, dim=0).numpy()
+        return result
 
     # Functions to save best model
-    def save_checkpoint(self, path: Path, epoch: int, val_loss: float):
+    def save_checkpoint(self, path: Path, history: dict):
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
-            'epoch': epoch,
-            'encoder_state_dict': self.encoder.state_dict(),
-            'decoder_state_dict': self.decoder.state_dict(),
+        
+        checkpoint = {
+            'model_state_dict': self.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'scaler_state_dict': self.scaler.state_dict(),
-            'val_loss': val_loss,
-            'history': self.history
-        }, path)
+            'history': history,
+            'config': {
+                'latent_dim': self.latent_dim,
+                'input_channels': self.input_channels,
+                'image_size': self.image_size,
+                'learning_rate': self.learning_rate
+            }
+        }
+        
+        torch.save(checkpoint, path)
+        print(f"Model zapisany w {path}")
 
     # function to load best model
     def load_checkpoint(self, path: Path):
         checkpoint = torch.load(path, map_location=self.device)
-        self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
-        self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
-
-        self.to(self.device)
-
+        self.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        if 'scaler_state_dict' in checkpoint:
-            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        self.history = checkpoint.get('history', self.history)
-        return checkpoint['epoch'], checkpoint['val_loss']
-         
         
-    
+        history = checkpoint.get('history', {
+            'train_loss': [],
+            'val_loss': [],
+            'train_recon_loss': [],
+            'val_recon_loss': []
+        })
+        
+        print(f"Checkpoint załadowany z {path}")
+        return history
+
+
