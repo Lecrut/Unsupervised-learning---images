@@ -37,7 +37,7 @@ Thumbs.db
 /data/
 *.pth
 *.pkl
-checkpoints/
+/checkpoints/
 results/
 local_logs/
 /models/

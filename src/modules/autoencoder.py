@@ -8,6 +8,7 @@ import numpy as np
 from tqdm import tqdm
 from typing import Dict, Tuple, Optional, List
 import torchvision.models as models
+from datetime import datetime
 from .encoder import Encoder
 from .decoder import Decoder
 
@@ -36,11 +37,21 @@ def ssim_loss(x, y, window_size=11, size_average=True):
 
 #%% Autoencoder Module - Optimized for WikiArt
 class Autoencoder(nn.Module):
-    def __init__(self, latent_dim=768, input_channels=4, learning_rate=3e-4, image_size=256, use_amp=True):
+    def __init__(self, 
+                 latent_dim=768, 
+                 input_channels=4, 
+                 learning_rate=3e-4, 
+                 image_size=256, 
+                 use_amp=True, 
+                 load_best=False
+                ):
         super().__init__()
         self.latent_dim = latent_dim
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.use_amp = use_amp and torch.cuda.is_available()
+        self.load_best = load_best
+        self.best_model_path = Path('checkpoints/best_autoencoder.pt')
+        self.model_loaded = False
 
         self.encoder = Encoder(latent_dim, input_channels, image_size)
         self.decoder = Decoder(latent_dim, input_channels, image_size)
@@ -63,6 +74,21 @@ class Autoencoder(nn.Module):
             'val_recon_loss': [],
             'learning_rates': []
         }
+
+        if load_best:
+            if not self.best_model_path.exists():
+                print(f"Brak zapisanego modelu w {self.best_model_path}")
+                print("Model zostanie wytrenowany od nowa")
+                self.model_loaded = False
+            else:
+                try:
+                    self.load_checkpoint()
+                    self.model_loaded = True
+                    print("Model wczytany pomyslnie")
+                except Exception as e:
+                    print(f"Blad podczas wczytywania modelu: {e}")
+                    print("Model zostanie wytrenowany od nowa")
+                    self.model_loaded = False
     
     def forward(self, x):
         with torch.cuda.amp.autocast(enabled=self.use_amp):
@@ -137,7 +163,6 @@ class Autoencoder(nn.Module):
 
     def fit(self, train_loader: DataLoader, val_loader: Optional[DataLoader] = None, 
             epochs: int = 50,
-            save_path: Optional[Path] = None,
             early_stopping_patience: int = 15):
 
         best_val_loss = float('inf')
@@ -163,15 +188,16 @@ class Autoencoder(nn.Module):
                 best_val_loss = val_metrics['loss']
                 patience_counter = 0
                 
-                if save_path:
-                    self.save_checkpoint(save_path / 'best_model.pt', epoch, best_val_loss)
-                    print(f"Model zapisany (val_loss: {best_val_loss:.6f})")
+                self.save_checkpoint(self.best_model_path, epoch, best_val_loss)
+                print(f"Model zapisany (val_loss: {best_val_loss:.6f})")
             else:
                 patience_counter += 1
                 
                 if early_stopping_patience and patience_counter >= early_stopping_patience:
                     print(f'\nEarly stopping po {epoch+1} epokach')
                     break
+        
+        print(f"\nNajlepszy model zapisany w: {self.best_model_path}")
         
         return self.history
 
@@ -240,29 +266,45 @@ class Autoencoder(nn.Module):
     # Functions to save best model
     def save_checkpoint(self, path: Path, epoch: int, val_loss: float):
         path.parent.mkdir(parents=True, exist_ok=True)
+        
+        if path.exists():
+            timestamp = datetime.now().strftime("%H-%M-%S-%d-%m")
+            old_path = path.parent / f"old-{timestamp}{path.suffix}"
+            path.rename(old_path)
+            print(f"Stary model przemianowany na: {old_path.name}")
+        
         torch.save({
             'epoch': epoch,
             'encoder_state_dict': self.encoder.state_dict(),
             'decoder_state_dict': self.decoder.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
             'scaler_state_dict': self.scaler.state_dict(),
             'val_loss': val_loss,
-            'history': self.history
+            'history': self.history,
+            'latent_dim': self.latent_dim
         }, path)
 
     # function to load best model
-    def load_checkpoint(self, path: Path):
+    def load_checkpoint(self, path: Optional[Path] = None):
+        if path is None:
+            path = self.best_model_path
+        
         checkpoint = torch.load(path, map_location=self.device)
         self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
         self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
-
-        self.to(self.device)
-
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        if 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         if 'scaler_state_dict' in checkpoint:
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        self.history = checkpoint.get('history', self.history)
-        return checkpoint['epoch'], checkpoint['val_loss']
-         
         
-    
+        self.history = checkpoint.get('history', self.history)
+        
+        print(f"Model wczytany z: {path}")
+        print(f"Epoka: {checkpoint['epoch']}, Val Loss: {checkpoint['val_loss']:.6f}")
+        
+        return checkpoint['epoch'], checkpoint['val_loss']
+
+
