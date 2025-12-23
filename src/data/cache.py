@@ -2,7 +2,7 @@
 import os
 import sys
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, ConcatDataset
 from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image
@@ -43,16 +43,24 @@ class ImageFolderDataset(Dataset):
             return self.to_tensor(img)
 
 #%% Create DataLoader from images in a folder
-def create_image_dataloader(folder, batch_size=64, num_workers=10, augmentation=False):
+def create_image_dataloader(folder, batch_size=64, num_workers=10, augmentation=False, original_loader=None):
     print(f"Tworzenie DataLoadera z obrazów w {folder}")
     dataset = ImageFolderDataset(folder, augmentation=augmentation)
     print(f"Liczba obrazów w zbiorze: {len(dataset)}")
 
+    if original_loader is not None:
+        batch_size = original_loader.batch_size
+        num_workers = original_loader.num_workers
+        original_dataset = original_loader.dataset
+        dataset = ConcatDataset([original_dataset, dataset])
+        print(f"Połączono datasety. Całkowita liczba obrazów: {len(dataset)}")
+
     loader = DataLoader(dataset,
                         batch_size=batch_size,
-                        shuffle=False,
+                        shuffle=True if original_loader else False,
                         num_workers=num_workers,
                         pin_memory=True)
+
     return loader
 
 #%% Save batch of images to disk
@@ -70,11 +78,11 @@ def process_batch_for_save(args):
     return saved_paths
 
 #%% Load or create damaged DataLoader
-def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=False, batch_size=64):
+def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=False, batch_size=64, concat_original=False):
 
     if os.path.exists(damaged_dir) and any(f.endswith('.png') for f in os.listdir(damaged_dir)):
         print(f"Ładowanie uszkodzonych obrazów z {damaged_dir}")
-        return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation)
+        return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation, original_loader=original_loader if concat_original else None)
 
     print("Generowanie uszkodzonych obrazów...")
     os.makedirs(damaged_dir, exist_ok=True)
@@ -106,4 +114,4 @@ def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=Fal
 
     print(f"Zapisano uszkodzone obrazy do {damaged_dir}")
 
-    return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation)
+    return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation, original_loader=original_loader if concat_original else None)
