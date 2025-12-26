@@ -73,6 +73,9 @@ class Autoencoder(nn.Module):
         return reconstruction, latent
     
     def compute_loss(self, original, reconstruction):
+        original = original.to(self.device)
+        reconstruction = reconstruction.to(self.device)
+        
         with torch.cuda.amp.autocast(enabled=self.use_amp):
             # 1. Charbonnier Loss
             diff = reconstruction - original
