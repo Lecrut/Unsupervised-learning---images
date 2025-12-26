@@ -5,7 +5,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from pathlib import Path
 import numpy as np
-from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure, PeakSignalNoiseRatio
+from torchmetrics.image import StructuralSimilarityIndexMeasure
 from tqdm import tqdm
 from typing import Dict, Tuple, Optional, List
 import torchvision.models as models
@@ -42,17 +42,6 @@ class Autoencoder(nn.Module):
         )
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
         
-        self.l1_loss = nn.L1Loss()
-
-        self.ms_ssim_loss = MultiScaleStructuralSimilarityIndexMeasure(
-            data_range=1.0
-        )
-
-        self.psnr = PeakSignalNoiseRatio(
-            data_range=1.0
-        )
-
-        self.l1_loss = nn.L1Loss()
 
         self.history = {
             'train_loss': [],
@@ -83,18 +72,22 @@ class Autoencoder(nn.Module):
             reconstruction = self.decoder(latent)
         return reconstruction, latent
     
-    def compute_loss(self, original, reconstruction) -> torch.Tensor:
+    def compute_loss(self, original, reconstruction):
         with torch.cuda.amp.autocast(enabled=self.use_amp):
-            l1 = self.l1_loss(reconstruction, original)
-            ms_ssim_loss = 1.0 - self.ms_ssim_loss(reconstruction, original)
-            psnr_loss = 1.0 / (self.psnr(reconstruction, original) + 1e-6)
+            # 1. Charbonnier Loss
+            diff = reconstruction - original
+            loss_pix = torch.mean(torch.sqrt(diff * diff + 1e-6))
+            
+            # 2. Gradient Loss 
+            orig_dy = torch.abs(original[:, :, 1:, :] - original[:, :, :-1, :])
+            orig_dx = torch.abs(original[:, :, :, 1:] - original[:, :, :, :-1])
+            recon_dy = torch.abs(reconstruction[:, :, 1:, :] - reconstruction[:, :, :-1, :])
+            recon_dx = torch.abs(reconstruction[:, :, :, 1:] - reconstruction[:, :, :, :-1])
+            
+            loss_grad = torch.mean(torch.abs(orig_dy - recon_dy)) + torch.mean(torch.abs(orig_dx - recon_dx))
 
-            total_loss = (
-                0.45 * l1 +
-                0.45 * ms_ssim_loss +
-                0.10 * psnr_loss
-            )
-        
+            total_loss = loss_pix + (0.1 * loss_grad)
+
         return total_loss
 
     def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
@@ -102,7 +95,7 @@ class Autoencoder(nn.Module):
         epoch_loss = 0.0
         epoch_recon_loss = 0.0
 
-        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training Epoch")):
+        for batch in tqdm(dataloader, desc="Training Epoch"):
             if isinstance(batch, dict):
                 img = batch['image'].to(self.device, non_blocking=True)
             else:
@@ -110,7 +103,7 @@ class Autoencoder(nn.Module):
             
             self.optimizer.zero_grad(set_to_none=True)
             reconstruction, _ = self.forward(img)
-            loss = self.compute_loss(img, reconstruction, batch_idx=batch_idx)
+            loss = self.compute_loss(img, reconstruction)
 
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
@@ -131,7 +124,7 @@ class Autoencoder(nn.Module):
         epoch_loss = 0.0
         epoch_recon_loss = 0.0
 
-        for batch in tqdm(dataloader, desc="Validation Epoch"):
+        for _, batch in enumerate(tqdm(dataloader, desc="Validation Epoch")):
             if isinstance(batch, dict):
                 img = batch['image'].to(self.device, non_blocking=True)
             else:
@@ -231,7 +224,7 @@ class Autoencoder(nn.Module):
         
         return reconstruction
     
-    def decode_batch(self, latent_vectors, batch_size=32):
+    def decode_batch(self, latent_vectors, batch_size=256):
         if isinstance(latent_vectors, torch.Tensor):
             latent_vectors = latent_vectors.detach().cpu().numpy()
         
@@ -240,7 +233,7 @@ class Autoencoder(nn.Module):
         self.eval()
         reconstructed = []
         
-        for i in range(0, len(latent_vectors), batch_size):
+        for i in tqdm(range(0, len(latent_vectors), batch_size), desc="Decoding batches"):
             batch = latent_vectors[i:i + batch_size]
             batch_tensor = torch.from_numpy(batch).float().to(self.device)
             

@@ -109,12 +109,12 @@ def concatenate_fn(batch):
     return torch.stack(batch_cpu, dim=0)
 
 #%% Function to shuffle data (correct images and damaged)
-def shuffle_data(correct_dataloader, damaged_dataloader, damaged_percent=0.5):
+def shuffle_data(correct_dataloader, damaged_dataloader, correct_percent=0.5, damaged_percent=0.5):
     correct_size = len(correct_dataloader.dataset)
     damaged_size = len(damaged_dataloader.dataset)
     
-    num_damaged = int(min(correct_size, damaged_size) * damaged_percent)
-    num_correct = max(1, int(num_damaged * (1 - damaged_percent) / damaged_percent))
+    num_damaged = int(damaged_size * damaged_percent)
+    num_correct = int(correct_size * correct_percent)
     
     correct_indices = torch.randperm(correct_size)[:num_correct].tolist()
     damaged_indices = torch.randperm(damaged_size)[:num_damaged].tolist()
@@ -135,6 +135,5 @@ def shuffle_data(correct_dataloader, damaged_dataloader, damaged_percent=0.5):
     )
     
     print(f"Utworzono dataset: {num_correct} poprawnych + {num_damaged} uszkodzonych = {len(combined_dataset)} obrazów")
-    print(f"Stosunek uszkodzeń: {damaged_percent*100:.1f}%")
     
     return shuffled_loader
