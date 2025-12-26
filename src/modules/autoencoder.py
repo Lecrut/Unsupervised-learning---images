@@ -5,35 +5,13 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from pathlib import Path
 import numpy as np
+from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure, PeakSignalNoiseRatio
 from tqdm import tqdm
 from typing import Dict, Tuple, Optional, List
 import torchvision.models as models
 from datetime import datetime
 from .encoder import Encoder
 from .decoder import Decoder
-
-#%% SSIM Loss
-def ssim_loss(x, y, window_size=11, size_average=True):
-    C1 = 0.01 ** 2
-    C2 = 0.03 ** 2
-    
-    mu_x = nn.functional.avg_pool2d(x, window_size, stride=1, padding=window_size//2)
-    mu_y = nn.functional.avg_pool2d(y, window_size, stride=1, padding=window_size//2)
-    
-    mu_x_sq = mu_x ** 2
-    mu_y_sq = mu_y ** 2
-    mu_xy = mu_x * mu_y
-    
-    sigma_x_sq = nn.functional.avg_pool2d(x**2, window_size, stride=1, padding=window_size//2) - mu_x_sq
-    sigma_y_sq = nn.functional.avg_pool2d(y**2, window_size, stride=1, padding=window_size//2) - mu_y_sq
-    sigma_xy = nn.functional.avg_pool2d(x*y, window_size, stride=1, padding=window_size//2) - mu_xy
-    
-    ssim_map = ((2*mu_xy + C1)*(2*sigma_xy + C2)) / ((mu_x_sq + mu_y_sq + C1)*(sigma_x_sq + sigma_y_sq + C2))
-    
-    if size_average:
-        return 1 - ssim_map.mean()
-    else:
-        return 1 - ssim_map.mean(dim=[1,2,3])
 
 #%% Autoencoder Module - Optimized for WikiArt
 class Autoencoder(nn.Module):
@@ -64,7 +42,16 @@ class Autoencoder(nn.Module):
         )
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
         
-        self.mse_loss = nn.MSELoss()
+        self.l1_loss = nn.L1Loss()
+
+        self.ms_ssim_loss = MultiScaleStructuralSimilarityIndexMeasure(
+            data_range=1.0
+        )
+
+        self.psnr = PeakSignalNoiseRatio(
+            data_range=1.0
+        )
+
         self.l1_loss = nn.L1Loss()
 
         self.history = {
@@ -92,21 +79,21 @@ class Autoencoder(nn.Module):
     
     def forward(self, x):
         with torch.cuda.amp.autocast(enabled=self.use_amp):
-            latent, skip_connections = self.encoder(x)
+            latent, _ = self.encoder(x)
             reconstruction = self.decoder(latent)
         return reconstruction, latent
     
-    def compute_loss(self, original, reconstruction, batch_idx: int = 0, compute_ssim_every: int = 10) -> torch.Tensor:
+    def compute_loss(self, original, reconstruction) -> torch.Tensor:
         with torch.cuda.amp.autocast(enabled=self.use_amp):
-            mse = self.mse_loss(reconstruction, original)
             l1 = self.l1_loss(reconstruction, original)
-            
-            if batch_idx % compute_ssim_every == 0:
-                ssim = ssim_loss(reconstruction, original)
-            else:
-                ssim = torch.tensor(0.0, device=original.device)
-            
-            total_loss = 0.5 * mse + 0.3 * l1 + 0.2 * ssim
+            ms_ssim_loss = 1.0 - self.ms_ssim_loss(reconstruction, original)
+            psnr_loss = 1.0 / (self.psnr(reconstruction, original) + 1e-6)
+
+            total_loss = (
+                0.45 * l1 +
+                0.45 * ms_ssim_loss +
+                0.10 * psnr_loss
+            )
         
         return total_loss
 
