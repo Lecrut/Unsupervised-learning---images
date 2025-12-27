@@ -3,18 +3,20 @@ from datasets import load_dataset
 from torchvision import transforms
 from torch.utils.data import DataLoader, Subset, ConcatDataset
 import torch
+from functools import partial
 
 #%% Constants definitions
 DATASET_NAME = "huggan/wikiart"
 IMAGE_SIZE = 256
+IMAGE_SIZE_BIGGER = 512
 
 #%% Check device - Cuda
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 #%% Preprocessing function
-def preprocess(batch):
+def preprocess(batch, image_size=IMAGE_SIZE):
     transform = transforms.Compose([
-        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+        transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
     ])
 
@@ -22,9 +24,9 @@ def preprocess(batch):
     return batch
 
 #%% Preprocessing function with alpha channel
-def preprocess_with_alpha(batch):
+def preprocess_with_alpha(batch, image_size=IMAGE_SIZE):
     transform = transforms.Compose([
-        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+        transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
     ])
 
@@ -47,12 +49,14 @@ class ImageDatasetWrapper(torch.utils.data.Dataset):
         return img
 
 #%% Load dataset and create DataLoaders
-def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, add_fourth_channel=False):
+def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, add_fourth_channel=False, use_bigger_image=False):
+    image_size = IMAGE_SIZE_BIGGER if use_bigger_image else IMAGE_SIZE
+    
     dataset = load_dataset(DATASET_NAME, split='train')
     if add_fourth_channel:
-        dataset = dataset.with_transform(preprocess_with_alpha)
+        dataset = dataset.with_transform(partial(preprocess_with_alpha, image_size=image_size))
     else:
-        dataset = dataset.with_transform(preprocess)
+        dataset = dataset.with_transform(partial(preprocess, image_size=image_size))
     
     train_size = int(len(dataset) * train_split)
     test_size = int(len(dataset) * test_split)
