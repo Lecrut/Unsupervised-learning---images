@@ -25,6 +25,7 @@ class Autoencoder(nn.Module):
                 ):
         super().__init__()
         self.latent_dim = latent_dim
+        self.input_channels = input_channels
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.use_amp = use_amp and torch.cuda.is_available()
         self.load_best = load_best

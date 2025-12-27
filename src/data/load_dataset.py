@@ -73,7 +73,7 @@ def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, 
     test_ds = ImageDatasetWrapper(test_ds)
     val_ds = ImageDatasetWrapper(val_ds)
     
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False if use_bigger_image else True, num_workers=num_workers)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     
