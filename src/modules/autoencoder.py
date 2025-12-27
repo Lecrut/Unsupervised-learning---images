@@ -92,7 +92,7 @@ class Autoencoder(nn.Module):
             
             loss_grad = torch.mean(torch.abs(orig_dy - recon_dy)) + torch.mean(torch.abs(orig_dx - recon_dx))
 
-            total_loss = loss_pix + (0.1 * loss_grad)
+            total_loss = loss_pix + loss_grad
 
         return total_loss
 
