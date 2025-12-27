@@ -75,17 +75,20 @@ class Autoencoder(nn.Module):
     def compute_loss(self, original, reconstruction):
         original = original.to(self.device)
         reconstruction = reconstruction.to(self.device)
+
+        original_rgb = original[:, :3, :, :]
+        reconstruction_rgb = reconstruction[:, :3, :, :]
         
         with torch.cuda.amp.autocast(enabled=self.use_amp):
             # 1. Charbonnier Loss
-            diff = reconstruction - original
+            diff = reconstruction_rgb - original_rgb
             loss_pix = torch.mean(torch.sqrt(diff * diff + 1e-6))
             
             # 2. Gradient Loss 
-            orig_dy = torch.abs(original[:, :, 1:, :] - original[:, :, :-1, :])
-            orig_dx = torch.abs(original[:, :, :, 1:] - original[:, :, :, :-1])
-            recon_dy = torch.abs(reconstruction[:, :, 1:, :] - reconstruction[:, :, :-1, :])
-            recon_dx = torch.abs(reconstruction[:, :, :, 1:] - reconstruction[:, :, :, :-1])
+            orig_dy = torch.abs(original_rgb[:, :, 1:, :] - original_rgb[:, :, :-1, :])
+            orig_dx = torch.abs(original_rgb[:, :, :, 1:] - original_rgb[:, :, :, :-1])
+            recon_dy = torch.abs(reconstruction_rgb[:, :, 1:, :] - reconstruction_rgb[:, :, :-1, :])
+            recon_dx = torch.abs(reconstruction_rgb[:, :, :, 1:] - reconstruction_rgb[:, :, :, :-1])
             
             loss_grad = torch.mean(torch.abs(orig_dy - recon_dy)) + torch.mean(torch.abs(orig_dx - recon_dx))
 
@@ -242,24 +245,29 @@ class Autoencoder(nn.Module):
         
         return reconstruction
     
-    def decode_batch(self, latent_vectors, batch_size=256):
-        if isinstance(latent_vectors, torch.Tensor):
-            latent_vectors = latent_vectors.detach().cpu().numpy()
+    def decode_batch(self, latent_vectors, batch_size=128):
+        self.decoder.eval()
         
-        latent_vectors = np.asarray(latent_vectors)
+        if isinstance(latent_vectors, np.ndarray):
+            latent_vectors = torch.from_numpy(latent_vectors).float()
         
-        self.eval()
-        reconstructed = []
+        device = next(self.decoder.parameters()).device
         
-        for i in tqdm(range(0, len(latent_vectors), batch_size), desc="Decoding batches"):
-            batch = latent_vectors[i:i + batch_size]
-            batch_tensor = torch.from_numpy(batch).float().to(self.device)
-            
-            with torch.no_grad():
-                recon = self.decoder(batch_tensor)
-                reconstructed.append(recon.cpu().numpy())
+        decoded_images = []
+        num_samples = latent_vectors.shape[0]
         
-        return np.concatenate(reconstructed, axis=0)
+        with torch.no_grad():
+            for i in tqdm(range(0, num_samples, batch_size)):
+                batch = latent_vectors[i:i+batch_size].to(device)
+                
+                decoded_batch = self.decoder(batch)
+                decoded_images.append(decoded_batch.cpu())
+                
+                if i % (batch_size * 10) == 0 and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        
+        decoded_images = torch.cat(decoded_images, dim=0)
+        return decoded_images.numpy()
 
     # Functions to save best model
     def save_checkpoint(self, path: Path, epoch: int, val_loss: float):
