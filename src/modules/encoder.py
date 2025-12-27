@@ -38,9 +38,7 @@ class Encoder(nn.Module):
         self.fc = nn.Linear(512 * 8 * 8, latent_dim)
         self.norm = nn.LayerNorm(latent_dim)
     
-    def forward(self, x):
-        x = 2.0 * x - 1.0
-        
+    def forward(self, x):        
         x1 = self.act1(self.bn1(self.conv1(x)))
         x2 = self.act2(self.bn2(self.conv2(x1)))
         x3 = self.act3(self.bn3(self.conv3(x2)))

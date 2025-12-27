@@ -104,13 +104,29 @@ class Autoencoder(nn.Module):
             else:
                 img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
             
+            if torch.isnan(img).any() or torch.isinf(img).any():
+                print("Wykryto NaN/Inf w danych wejściowych! Pomijam batch.")
+                continue
+
             self.optimizer.zero_grad(set_to_none=True)
-            reconstruction, _ = self.forward(img)
-            loss = self.compute_loss(img, reconstruction)
+            
+            with torch.cuda.amp.autocast(enabled=self.use_amp):
+                reconstruction, _ = self.forward(img)
+                loss = self.compute_loss(img, reconstruction)
+
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"Wykryto NaN w Loss: {loss.item()}. Pomijam krok.")
+                continue
 
             self.scaler.scale(loss).backward()
+
+            self.scaler.unscale_(self.optimizer)
+            
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+            
             self.scaler.step(self.optimizer)
             self.scaler.update()
+
             self.scheduler.step()
 
             epoch_loss += loss.item()
@@ -120,7 +136,6 @@ class Autoencoder(nn.Module):
             'loss': epoch_loss / len(dataloader),
             'recon_loss': epoch_recon_loss / len(dataloader)
         }
-
     @torch.no_grad()
     def validate_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
         self.eval()
