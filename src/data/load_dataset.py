@@ -108,7 +108,7 @@ def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, 
     return train_loader, test_loader, val_loader
 
 #%% Load paired dataset and create DataLoaders
-def load_paired_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=0):
+def load_paired_data(train_split=0.7, test_split=0.15, batch_size=64, num_workers=10):
     dataset = load_dataset(DATASET_NAME, split='train')
     dataset = dataset.with_transform(preprocess_paired)
     
