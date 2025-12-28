@@ -33,6 +33,22 @@ def preprocess_with_alpha(batch, image_size=IMAGE_SIZE):
     batch['image'] = [transform(img.convert('RGBA')).to(device) for img in batch['image']]
     return batch
 
+#%% Preprocessing function for paired images (small, big)
+def preprocess_paired(batch, size_small=IMAGE_SIZE, size_big=IMAGE_SIZE_BIGGER):
+    transform_small = transforms.Compose([
+        transforms.Resize((size_small, size_small)),
+        transforms.ToTensor(),
+    ])
+    transform_big = transforms.Compose([
+        transforms.Resize((size_big, size_big)),
+        transforms.ToTensor(),
+    ])
+
+    images = [img.convert('RGB') for img in batch['image']]
+    batch['small'] = [transform_small(img).to(device) for img in images]
+    batch['big'] = [transform_big(img).to(device) for img in images]
+    return batch
+
 #%% Image Dataset Wrapper
 class ImageDatasetWrapper(torch.utils.data.Dataset):
     def __init__(self, hf_dataset):
@@ -47,6 +63,18 @@ class ImageDatasetWrapper(torch.utils.data.Dataset):
         if isinstance(img, list) and len(img) > 0:
             img = img[0]
         return img
+
+#%% Paired Image Dataset Wrapper
+class PairedImageDatasetWrapper(torch.utils.data.Dataset):
+    def __init__(self, hf_dataset):
+        self.ds = hf_dataset
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        item = self.ds[idx]
+        return item['small'], item['big']
 
 #%% Load dataset and create DataLoaders
 def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, add_fourth_channel=False, use_bigger_image=False):
@@ -74,6 +102,32 @@ def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, 
     val_ds = ImageDatasetWrapper(val_ds)
     
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False if use_bigger_image else True, num_workers=num_workers)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    
+    return train_loader, test_loader, val_loader
+
+#%% Load paired dataset and create DataLoaders
+def load_paired_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=0):
+    dataset = load_dataset(DATASET_NAME, split='train')
+    dataset = dataset.with_transform(preprocess_paired)
+    
+    train_size = int(len(dataset) * train_split)
+    test_size = int(len(dataset) * test_split)
+    
+    splits = dataset.train_test_split(train_size=train_size, seed=42)
+    train_ds = splits['train']
+    temp_ds = splits['test']
+    
+    test_val_splits = temp_ds.train_test_split(train_size=test_size, seed=42)
+    test_ds = test_val_splits['train']
+    val_ds = test_val_splits['test']
+
+    train_ds = PairedImageDatasetWrapper(train_ds)
+    test_ds = PairedImageDatasetWrapper(test_ds)
+    val_ds = PairedImageDatasetWrapper(val_ds)
+    
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     
