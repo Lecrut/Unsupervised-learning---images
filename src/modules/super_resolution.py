@@ -14,7 +14,9 @@ class SuperResolutionModel(Autoencoder):
         super().__init__(latent_dim=latent_dim, input_channels=input_channels, learning_rate=learning_rate, image_size=image_size, use_amp=use_amp, load_best=load_best)
         self.upsampler = nn.Sequential(
             nn.Conv2d(self.input_channels, self.input_channels * 4, kernel_size=3, padding=1), 
+            nn.ReLU(),
             nn.PixelShuffle(2), 
+            nn.Sigmoid()
         ).to(self.device)
 
         self.best_model_path = Path('checkpoints/super_resolution/best_super_resolution.pt')
