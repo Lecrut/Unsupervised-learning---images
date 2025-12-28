@@ -7,26 +7,50 @@ import torch
 from typing import Dict
 from tqdm import tqdm
 
+#%% Helper Classes
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.prelu = nn.PReLU()
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+
+    def forward(self, x):
+        residual = self.conv1(x)
+        residual = self.bn1(residual)
+        residual = self.prelu(residual)
+        residual = self.conv2(residual)
+        residual = self.bn2(residual)
+        return x + residual
 
 #%% Super Resolution Model
 class SuperResolutionModel(Autoencoder): 
     def __init__(self, latent_dim=768, input_channels=3, learning_rate=0.001, image_size=256, use_amp=True, load_best=False):
         super().__init__(latent_dim=latent_dim, input_channels=input_channels, learning_rate=learning_rate, image_size=image_size, use_amp=use_amp, load_best=load_best)
-        self.upsampler = nn.Sequential(
-            nn.Conv2d(self.input_channels, self.input_channels * 4, kernel_size=3, padding=1), 
-            nn.ReLU(),
-            nn.PixelShuffle(2), 
+        
+        self.model = nn.Sequential(
+            nn.Conv2d(self.input_channels, 64, kernel_size=9, padding=4),
+            nn.PReLU(),
+            *[ResidualBlock(64) for _ in range(5)],
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.Conv2d(64, 256, kernel_size=3, padding=1),
+            nn.PixelShuffle(2),
+            nn.PReLU(),
+            nn.Conv2d(64, self.input_channels, kernel_size=9, padding=4),
             nn.Sigmoid()
         ).to(self.device)
 
+        self.l1_loss = nn.L1Loss()
+        
         self.best_model_path = Path('checkpoints/super_resolution/best_super_resolution.pt')
 
     def forward(self, x):
         with torch.cuda.amp.autocast(enabled=self.use_amp):
-            latent, _ = self.encoder(x)
-            feature_256 = self.decoder(latent) 
-            output_512 = self.upsampler(feature_256) 
-        return output_512, latent
+            output = self.model(x)
+        return output, None
 
     def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
         self.train()
@@ -53,9 +77,8 @@ class SuperResolutionModel(Autoencoder):
         return {'loss': avg_loss, 'recon_loss': avg_loss}
 
     def compute_loss(self, hr_img, sr_img):
-        loss_fn = nn.L1Loss()
-        return loss_fn(sr_img, hr_img)
-
+        return self.l1_loss(sr_img, hr_img)
+        
     @torch.no_grad()
     def validate_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
         self.eval()
