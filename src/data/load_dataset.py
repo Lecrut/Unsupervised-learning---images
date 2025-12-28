@@ -66,15 +66,31 @@ class ImageDatasetWrapper(torch.utils.data.Dataset):
 
 #%% Paired Image Dataset Wrapper
 class PairedImageDatasetWrapper(torch.utils.data.Dataset):
-    def __init__(self, hf_dataset):
+    def __init__(self, hf_dataset, patch_size=48, scale_factor=2):
         self.ds = hf_dataset
+        self.patch_size = patch_size
+        self.scale_factor = scale_factor
+        
+        self.crop = transforms.RandomCrop(patch_size, pad_if_needed=True, padding_mode='reflect')
+        self.resize = transforms.Resize((patch_size // scale_factor, patch_size // scale_factor), 
+                                      interpolation=transforms.InterpolationMode.BICUBIC)
+        self.to_tensor = transforms.ToTensor()
 
     def __len__(self):
         return len(self.ds)
 
     def __getitem__(self, idx):
         item = self.ds[idx]
-        return item['small'], item['big']
+        img = item['image']
+        
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+            
+        hr_patch = self.crop(img)
+        
+        lr_patch = self.resize(hr_patch)
+        
+        return self.to_tensor(lr_patch), self.to_tensor(hr_patch)
 
 #%% Load dataset and create DataLoaders
 def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, add_fourth_channel=False, use_bigger_image=False):
@@ -108,9 +124,8 @@ def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, 
     return train_loader, test_loader, val_loader
 
 #%% Load paired dataset and create DataLoaders
-def load_paired_data(train_split=0.7, test_split=0.15, batch_size=64, num_workers=10):
+def load_paired_data(train_split=0.7, test_split=0.15, batch_size=64, num_workers=10, patch_size=48, scale_factor=2):
     dataset = load_dataset(DATASET_NAME, split='train')
-    dataset = dataset.with_transform(preprocess_paired)
     
     train_size = int(len(dataset) * train_split)
     test_size = int(len(dataset) * test_split)
@@ -123,9 +138,9 @@ def load_paired_data(train_split=0.7, test_split=0.15, batch_size=64, num_worker
     test_ds = test_val_splits['train']
     val_ds = test_val_splits['test']
 
-    train_ds = PairedImageDatasetWrapper(train_ds)
-    test_ds = PairedImageDatasetWrapper(test_ds)
-    val_ds = PairedImageDatasetWrapper(val_ds)
+    train_ds = PairedImageDatasetWrapper(train_ds, patch_size=patch_size, scale_factor=scale_factor)
+    test_ds = PairedImageDatasetWrapper(test_ds, patch_size=patch_size, scale_factor=scale_factor)
+    val_ds = PairedImageDatasetWrapper(val_ds, patch_size=patch_size, scale_factor=scale_factor)
     
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
