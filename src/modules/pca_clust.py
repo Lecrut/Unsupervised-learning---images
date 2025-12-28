@@ -3,9 +3,8 @@ import numpy as np
 import torch
 import umap
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import HDBSCAN
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.cluster import MiniBatchKMeans
 
 #%% Helper Function
 def _ensure_numpy(data):
@@ -13,8 +12,8 @@ def _ensure_numpy(data):
         return data.cpu().detach().numpy()
     return np.asarray(data)
 
-#%% UMAP - PCA Reduction
-def our_pca(latent_damaged, latent_original, n_components=10):
+#%% UMAP - Visualization Optimized
+def our_pca(latent_damaged, latent_original, n_components=2):
     X = _ensure_numpy(latent_damaged)
     Y = _ensure_numpy(latent_original)
     combined = np.vstack([X, Y])
@@ -22,81 +21,58 @@ def our_pca(latent_damaged, latent_original, n_components=10):
     scaler = StandardScaler()
     combined_scaled = scaler.fit_transform(combined)
 
-    print(f"Redukcja UMAP (Manhattan) do {n_components} wymiarów...")
+    print(f"Redukcja UMAP do {n_components} wymiarów (tryb wizualny)...")
     
     reducer = umap.UMAP(
         n_components=n_components,
-        n_neighbors=15,        
-        min_dist=0.0,
-        metric='manhattan',
+        n_neighbors=15,    
+        min_dist=0.1,        
+        metric='cosine',     
+        init='spectral',     
+        n_jobs=-1,
         random_state=42
     )
     
     transformed = reducer.fit_transform(combined_scaled)
+
+    min_max = MinMaxScaler()
+    transformed = min_max.fit_transform(transformed)
+
     n_damaged = len(X)
     return transformed[:n_damaged], transformed[n_damaged:]
 
-#%% HDBSCAN - Balanced Snake Cutter
-def clustering(latent_damaged, latent_original, min_samples=80): 
+#%% Clustering - The Visual Cutter
+def clustering(latent_damaged, latent_original, n_clusters=20): 
     X = _ensure_numpy(latent_damaged)
     Y = _ensure_numpy(latent_original)
 
-    def force_assign_noise(data, labels):
-        if -1 not in labels:
-            return labels
-        
-        noise_mask = (labels == -1)
-        data_clean = data[~noise_mask]
-        labels_clean = labels[~noise_mask]
-        data_noise = data[noise_mask]
-
-        if len(labels_clean) == 0:
-            return labels
-
-        knn = KNeighborsClassifier(n_neighbors=1, n_jobs=-1, metric='manhattan')
-        knn.fit(data_clean, labels_clean)
-        predicted_labels = knn.predict(data_noise)
-        
-        new_labels = labels.copy()
-        new_labels[noise_mask] = predicted_labels
-        return new_labels
-
-    print(f"Uruchamianie HDBSCAN (Leaf, Manhattan, min_cluster_size={min_samples})...")
+    print(f"Błyskawiczne cięcie węża 2D na {n_clusters} segmentów...")
     
-    clusterer = HDBSCAN(
-        min_cluster_size=min_samples,  
-        min_samples=1,                  
-        cluster_selection_method='leaf',
-        metric='manhattan',             
-        allow_single_cluster=False,
-        n_jobs=-1
-    )
-    damaged_labels = clusterer.fit_predict(X)
-    damaged_labels = force_assign_noise(X, damaged_labels)
+    combined_2d = np.vstack([X, Y])
     
-    clusterer_orig = HDBSCAN(
-        min_cluster_size=min_samples,
-        min_samples=1,
-        cluster_selection_method='leaf',
-        metric='manhattan',
-        allow_single_cluster=False,
-        n_jobs=-1
+    kmeans = MiniBatchKMeans(
+        n_clusters=n_clusters,
+        batch_size=4096,
+        n_init=10,
+        random_state=42
     )
-    original_labels = clusterer_orig.fit_predict(Y)
-    original_labels = force_assign_noise(Y, original_labels)
+    
+    kmeans.fit(combined_2d)
+    
+    damaged_labels = kmeans.predict(X)
+    original_labels = kmeans.predict(Y)
 
     def print_stats(name, labels):
-        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-        n_noise = list(labels).count(-1)
-        print(f"   {name}: {n_clusters} klastrów (cel: 10-30), {n_noise} szum.")
+        unique = len(np.unique(labels))
+        print(f"   {name}: Pocięto na {unique} segmentów.")
 
     print_stats("Damaged", damaged_labels)
     print_stats("Original", original_labels)
 
     return damaged_labels, original_labels
 
-#%% UMAP Visualization
-def display_umap(latent, labels=None, n_clusters=None):
+#%% Visualization
+def display_umap(latent, labels=None):
     X = _ensure_numpy(latent)
     if labels is not None:
         labels = _ensure_numpy(labels)
@@ -104,24 +80,26 @@ def display_umap(latent, labels=None, n_clusters=None):
 
     print("Rysowanie...")
     
-    reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, metric='manhattan')
-    embedding = reducer.fit_transform(X)
-
     plt.figure(figsize=(12, 8))
     
     if labels is None:
-        plt.scatter(embedding[:, 0], embedding[:, 1], s=5, c='gray')
+        plt.scatter(X[:, 0], X[:, 1], s=5, c='gray')
     else:
         unique_labels = np.unique(labels)
-        colors = plt.cm.nipy_spectral(np.linspace(0, 1, len(unique_labels)))
+        colors = plt.cm.jet(np.linspace(0, 1, len(unique_labels)))
 
         for i, lbl in enumerate(unique_labels):
             mask = (labels == lbl)
-            plt.scatter(embedding[mask, 0], embedding[mask, 1], 
-                        c=[colors[i]], s=8, label=f'{lbl}', alpha=1.0)
+            plt.scatter(X[mask, 0], X[mask, 1], 
+                        c=[colors[i]], s=10, label=f'{lbl}', alpha=1.0)
+            
+            center = np.mean(X[mask], axis=0)
+            plt.text(center[0], center[1], str(lbl), fontsize=9, fontweight='bold', 
+                     bbox=dict(facecolor='white', alpha=0.5, edgecolor='none', pad=1))
         
-    plt.title(f'Wynik HDBSCAN (min_size=80, klastrów: {len(unique_labels)})', fontsize=14)
-    if len(unique_labels) < 25:
+    plt.title(f'Wynik: Pocięty Wąż ({len(unique_labels)} segmentów)', fontsize=14)
+    
+    if len(unique_labels) <= 10:
         plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left')
     
     plt.tight_layout()
