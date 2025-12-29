@@ -24,6 +24,19 @@ def tensor_to_display_rgb(img_np):
     img_rgb = img_np[:3, :, :]
     img_rgb = np.transpose(img_rgb, (1, 2, 0))
     return np.clip(img_rgb, 0.0, 1.0)
+
+@st.cache_resource
+def load_sr_model():
+    with st.spinner('Loading Super Resolution model...'):
+        sr_model = SuperResolutionModel(
+            input_channels=3,
+            scale=2,
+            learning_rate=0.,
+            load_best=True
+        )
+        sr_model.eval()
+        sr_model.to(device)
+    return sr_model
  
 #%% Page Navigation
 with st.sidebar:
@@ -123,19 +136,6 @@ def load_resources():
             latent_damaged_vectors, latent_original_vectors,
             smaller_latent_damaged, smaller_latent_original,
             clusters_damaged, clusters_original)
-
-@st.cache_resource
-def load_sr_model():
-    with st.spinner('Loading Super Resolution model...'):
-        sr_model = SuperResolutionModel(
-            input_channels=3,
-            scale=2,
-            learning_rate=0.,
-            load_best=True
-        )
-        sr_model.eval()
-        sr_model.to(device)
-    return sr_model
 
 def generate_damage_on_the_fly(clean_tensor, seed):
     np.random.seed(seed)
