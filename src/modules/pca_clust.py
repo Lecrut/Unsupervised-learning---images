@@ -18,7 +18,6 @@ def _ensure_numpy(data):
         return data.cpu().detach().numpy()
     return np.asarray(data)
 
-#%% old Our PCA:
 def our_pca(latent_damaged, latent_original, n_components=2):
     X = _ensure_numpy(latent_damaged)
     Y = _ensure_numpy(latent_original)
@@ -47,70 +46,35 @@ def our_pca(latent_damaged, latent_original, n_components=2):
     n_damaged = len(X)
     return transformed[:n_damaged], transformed[n_damaged:]
 
-#%% oLD CLUSTERING:
-def clustering(latent_damaged, latent_original, n_clusters=20, use_full_space=True): 
-    """
-    Klasteryzacja w pełnej przestrzeni latentnej (768D) lub zredukowanej (2D).
-    
-    Args:
-        latent_damaged: wektory latentne uszkodzonych obrazów
-        latent_original: wektory latentne oryginalnych obrazów
-        n_clusters: liczba klastrów
-        use_full_space: True = klasteryzacja w 768D (lepiej), False = w 2D (tylko wizualizacja)
-    
-    Returns:
-        tuple: (damaged_labels, original_labels, cluster_info)
-            gdzie cluster_info zawiera: {'centroids', 'scaler', 'inertia'}
-    """
+#%% Clustering - The Visual Cutter
+def clustering(latent_damaged, latent_original, n_clusters=20): 
     X = _ensure_numpy(latent_damaged)
     Y = _ensure_numpy(latent_original)
 
-    if use_full_space:
-        print(f"Klasteryzacja w pełnej przestrzeni latentnej ({X.shape[1]}D) na {n_clusters} klastrów...")
-    else:
-        print(f"Klasteryzacja w przestrzeni 2D (tylko wizualizacja) na {n_clusters} segmentów...")
+    print(f"Błyskawiczne cięcie węża 2D na {n_clusters} segmentów...")
     
-    combined = np.vstack([X, Y])
-    
-    scaler = StandardScaler()
-    combined_scaled = scaler.fit_transform(combined)
+    combined_2d = np.vstack([X, Y])
     
     kmeans = MiniBatchKMeans(
         n_clusters=n_clusters,
         batch_size=4096,
-        n_init=20,
-        max_iter=300,
-        random_state=42,
-        verbose=0
+        n_init=10,
+        random_state=42
     )
     
-    kmeans.fit(combined_scaled)
+    kmeans.fit(combined_2d)
     
-    X_scaled = combined_scaled[:len(X)]
-    Y_scaled = combined_scaled[len(X):]
-    
-    damaged_labels = kmeans.predict(X_scaled)
-    original_labels = kmeans.predict(Y_scaled)
+    damaged_labels = kmeans.predict(X)
+    original_labels = kmeans.predict(Y)
 
     def print_stats(name, labels):
         unique = len(np.unique(labels))
-        counts = np.bincount(labels)
-        min_count = counts.min()
-        max_count = counts.max()
-        print(f"   {name}: {unique} klastrów (min: {min_count}, max: {max_count} próbek)")
+        print(f"   {name}: Pocięto na {unique} segmentów.")
 
     print_stats("Damaged", damaged_labels)
     print_stats("Original", original_labels)
-    print(f"   Inertia (jakość): {kmeans.inertia_:.2f}")
-    
-    cluster_info = {
-        'centroids': kmeans.cluster_centers_,
-        'scaler': scaler,
-        'inertia': kmeans.inertia_,
-        'n_features': X.shape[1]
-    }
 
-    return damaged_labels, original_labels, cluster_info
+    return damaged_labels, original_labels
 
 #%% Visualization UMAP
 def display_umap(latent, labels=None):
