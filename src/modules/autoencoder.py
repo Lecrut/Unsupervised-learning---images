@@ -3,12 +3,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchinfo import summary
 from pathlib import Path
 import numpy as np
-from torchmetrics.image import StructuralSimilarityIndexMeasure
 from tqdm import tqdm
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, Tuple, Optional
 import torchvision.models as models
 from datetime import datetime
 from .encoder import Encoder
@@ -93,7 +91,7 @@ class Autoencoder(nn.Module):
     def forward(self, x):
         with torch.cuda.amp.autocast(enabled=self.use_amp):
             latent, _ = self.encoder(x)
-            reconstruction = self.decoder(latent) # Zwraca [B, 3, H, W]
+            reconstruction = self.decoder(latent) 
         return reconstruction, latent
     
     def compute_loss(self, original, reconstruction):
@@ -103,11 +101,9 @@ class Autoencoder(nn.Module):
         original_rgb = original[:, :3, :, :]
         
         with torch.cuda.amp.autocast(enabled=self.use_amp):
-            # 1. Pixel Loss (Charbonnier)
             diff = reconstruction - original_rgb
             loss_pix = torch.mean(torch.sqrt(diff * diff + 1e-6))
             
-            # 2. Perceptual Loss (VGG)
             loss_percep = self.perceptual_loss_fn(reconstruction, original_rgb) * 0.1
             
             total_loss = loss_pix + loss_percep
