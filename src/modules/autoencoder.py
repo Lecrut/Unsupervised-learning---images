@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torchinfo import summary
 from pathlib import Path
 import numpy as np
 from torchmetrics.image import StructuralSimilarityIndexMeasure
