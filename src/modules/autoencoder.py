@@ -13,6 +13,27 @@ from datetime import datetime
 from .encoder import Encoder
 from .decoder import Decoder
 
+#%% VGG Loss:
+class VGGPerceptualLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        vgg = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1).features
+        self.blocks = nn.ModuleList([vgg[:2], vgg[2:7], vgg[7:12], vgg[12:21], vgg[21:30]])
+        for param in self.parameters(): param.requires_grad = False
+        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+    def forward(self, input, target):
+        # Input to rekonstrukcja (3 kanały), Target to oryginał (3 kanały RGB po obcięciu)
+        input = (input - self.mean) / self.std
+        target = (target - self.mean) / self.std
+        loss = 0.0
+        x, y = input, target
+        for block in self.blocks:
+            x, y = block(x), block(y)
+            loss += torch.mean(torch.abs(x - y))
+        return loss
+
 #%% Autoencoder Module - Optimized for WikiArt
 class Autoencoder(nn.Module):
     def __init__(self, 
@@ -28,6 +49,7 @@ class Autoencoder(nn.Module):
         self.input_channels = input_channels
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.use_amp = use_amp and torch.cuda.is_available()
+        
         self.load_best = load_best
         self.best_model_path = Path('checkpoints/best_autoencoder.pt')
         self.model_loaded = False
@@ -35,20 +57,20 @@ class Autoencoder(nn.Module):
         self.encoder = Encoder(latent_dim, input_channels, image_size)
         self.decoder = Decoder(latent_dim, input_channels, image_size)
 
+        self.encoder = Encoder(latent_dim, input_channels, image_size)
+        self.decoder = Decoder(latent_dim, output_channels=3, image_size=image_size)
+
+        self.perceptual_loss_fn = VGGPerceptualLoss().to(self.device)
+
         self.to(self.device)
 
         self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=0.01)
-        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            self.optimizer, T_0=10, T_mult=2, eta_min=1e-6
-        )
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=10, T_mult=2)
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
-        
-
         self.history = {
-            'train_loss': [],
-            'val_loss': [],
-            'train_recon_loss': [],
-            'val_recon_loss': [],
+            'train_loss': [], 'val_loss': [], 
+            'train_recon_loss': [], 'val_recon_loss': [],
+            'train_perceptual_loss': [], 'val_perceptual_loss': [],
             'learning_rates': []
         }
 
@@ -70,37 +92,32 @@ class Autoencoder(nn.Module):
     def forward(self, x):
         with torch.cuda.amp.autocast(enabled=self.use_amp):
             latent, _ = self.encoder(x)
-            reconstruction = self.decoder(latent)
+            reconstruction = self.decoder(latent) # Zwraca [B, 3, H, W]
         return reconstruction, latent
     
     def compute_loss(self, original, reconstruction):
         original = original.to(self.device)
         reconstruction = reconstruction.to(self.device)
-
+        
         original_rgb = original[:, :3, :, :]
-        reconstruction_rgb = reconstruction[:, :3, :, :]
         
         with torch.cuda.amp.autocast(enabled=self.use_amp):
-            # 1. Charbonnier Loss
-            diff = reconstruction_rgb - original_rgb
+            # 1. Pixel Loss (Charbonnier)
+            diff = reconstruction - original_rgb
             loss_pix = torch.mean(torch.sqrt(diff * diff + 1e-6))
             
-            # 2. Gradient Loss 
-            orig_dy = torch.abs(original_rgb[:, :, 1:, :] - original_rgb[:, :, :-1, :])
-            orig_dx = torch.abs(original_rgb[:, :, :, 1:] - original_rgb[:, :, :, :-1])
-            recon_dy = torch.abs(reconstruction_rgb[:, :, 1:, :] - reconstruction_rgb[:, :, :-1, :])
-            recon_dx = torch.abs(reconstruction_rgb[:, :, :, 1:] - reconstruction_rgb[:, :, :, :-1])
+            # 2. Perceptual Loss (VGG)
+            loss_percep = self.perceptual_loss_fn(reconstruction, original_rgb) * 0.1
             
-            loss_grad = torch.mean(torch.abs(orig_dy - recon_dy)) + torch.mean(torch.abs(orig_dx - recon_dx))
-
-            total_loss = loss_pix + loss_grad
-
-        return total_loss
+            total_loss = loss_pix + loss_percep
+            
+        return total_loss, loss_pix, loss_percep
 
     def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
         self.train()
         epoch_loss = 0.0
         epoch_recon_loss = 0.0
+        epoch_percep_loss = 0.0
 
         for batch in tqdm(dataloader, desc="Training Epoch"):
             if isinstance(batch, dict):
@@ -115,36 +132,35 @@ class Autoencoder(nn.Module):
             self.optimizer.zero_grad(set_to_none=True)
             
             with torch.cuda.amp.autocast(enabled=self.use_amp):
-                reconstruction, _ = self.forward(img)
-                loss = self.compute_loss(img, reconstruction)
+                recon, _ = self.forward(img)
+                loss, l_pix, l_percep = self.compute_loss(img, recon)
 
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"Wykryto NaN w Loss: {loss.item()}. Pomijam krok.")
                 continue
 
             self.scaler.scale(loss).backward()
-
-            self.scaler.unscale_(self.optimizer)
-            
-            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-            
             self.scaler.step(self.optimizer)
             self.scaler.update()
-
             self.scheduler.step()
-
+            
             epoch_loss += loss.item()
-            epoch_recon_loss += loss.item()
-        
+            epoch_recon_loss += l_pix.item()
+            epoch_percep_loss += l_percep.item()
+            
+        n = len(dataloader)
         return {
-            'loss': epoch_loss / len(dataloader),
-            'recon_loss': epoch_recon_loss / len(dataloader)
+            'loss': epoch_loss / n,
+            'recon_loss': epoch_recon_loss / n,
+            'perceptual_loss': epoch_percep_loss / n
         }
+    
     @torch.no_grad()
     def validate_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
         self.eval()
         epoch_loss = 0.0
         epoch_recon_loss = 0.0
+        epoch_percep_loss = 0.0
 
         for _, batch in enumerate(tqdm(dataloader, desc="Validation Epoch")):
             if isinstance(batch, dict):
@@ -152,21 +168,21 @@ class Autoencoder(nn.Module):
             else:
                 img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
             
-            reconstruction, _ = self.forward(img)
-            loss = self.compute_loss(img, reconstruction)
+            recon, _ = self.forward(img)
+            loss, l_pix, l_percep = self.compute_loss(img, recon)
 
             epoch_loss += loss.item()
-            epoch_recon_loss += loss.item()
-        
+            epoch_recon_loss += l_pix.item()
+            epoch_percep_loss += l_percep.item()
+            
+        n = len(dataloader)
         return {
-            'loss': epoch_loss / len(dataloader),
-            'recon_loss': epoch_recon_loss / len(dataloader)
+            'loss': epoch_loss / n,
+            'recon_loss': epoch_recon_loss / n,
+            'perceptual_loss': epoch_percep_loss / n
         }
 
-    def fit(self, train_loader: DataLoader, val_loader: Optional[DataLoader] = None, 
-            epochs: int = 50,
-            early_stopping_patience: int = 15):
-
+    def fit(self, train_loader, val_loader=None, epochs=50, early_stopping_patience=15):
         best_val_loss = float('inf')
         patience_counter = 0
 
@@ -174,32 +190,33 @@ class Autoencoder(nn.Module):
             print(f"\nEpoka {epoch + 1}/{epochs}")
 
             train_metrics = self.train_epoch(train_loader)
-            val_metrics = self.validate_epoch(val_loader) if val_loader else {'loss': 0.0, 'recon_loss': 0.0}
-
-            self.history['train_loss'].append(train_metrics['loss'])
-            self.history['val_loss'].append(val_metrics['loss'])
-            self.history['train_recon_loss'].append(train_metrics['recon_loss'])
-            self.history['val_recon_loss'].append(val_metrics['recon_loss'])
-            self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
             
-            print(f"Train Loss: {train_metrics['loss']:.6f}")
-            print(f"Val Loss: {val_metrics['loss']:.6f}")
-            print(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+            self.history['train_loss'].append(train_metrics['loss'])
+            self.history['train_recon_loss'].append(train_metrics['recon_loss'])
+            self.history['train_perceptual_loss'].append(train_metrics['perceptual_loss'])
+            self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
 
-            if val_metrics['loss'] < best_val_loss:
-                best_val_loss = val_metrics['loss']
-                patience_counter = 0
+            print(f"Train Loss: {train_metrics['loss']:.5f} (Pix: {train_metrics['recon_loss']:.5f}, VGG: {train_metrics['perceptual_loss']:.5f})")
+
+            if val_loader:
+                val_metrics = self.validate_epoch(val_loader)
                 
-                self.save_checkpoint(self.best_model_path, epoch, best_val_loss)
-                print(f"Model zapisany (val_loss: {best_val_loss:.6f})")
-            else:
-                patience_counter += 1
+                self.history['val_loss'].append(val_metrics['loss'])
+                self.history['val_recon_loss'].append(val_metrics['recon_loss'])
+                self.history['val_perceptual_loss'].append(val_metrics['perceptual_loss'])
                 
-                if early_stopping_patience and patience_counter >= early_stopping_patience:
-                    print(f'\nEarly stopping po {epoch+1} epokach')
-                    break
-        
-        print(f"\nNajlepszy model zapisany w: {self.best_model_path}")
+                print(f"Val Loss: {val_metrics['loss']:.5f} (Pix: {val_metrics['recon_loss']:.5f}, VGG: {val_metrics['perceptual_loss']:.5f})")
+
+                if val_metrics['loss'] < best_val_loss:
+                    best_val_loss = val_metrics['loss']
+                    patience_counter = 0
+                    self.save_checkpoint(self.best_model_path, epoch, best_val_loss)
+                    print(f"Model zapisany.")
+                else:
+                    patience_counter += 1
+                    if early_stopping_patience and patience_counter >= early_stopping_patience:
+                        print(f'\nEarly stopping po {epoch+1} epokach')
+                        break
         
         return self.history
 
