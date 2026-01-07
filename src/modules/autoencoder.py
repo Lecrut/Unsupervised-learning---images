@@ -37,6 +37,7 @@ class Autoencoder(nn.Module):
 
         self.projection_head = nn.Sequential(
             nn.Linear(latent_dim, 512),
+            nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Linear(512, 128)
         )
@@ -81,13 +82,14 @@ class Autoencoder(nn.Module):
     def forward(self, x):
         with torch.cuda.amp.autocast(enabled=self.use_amp):
             latent, _ = self.encoder(x)
-            reconstruction = self.decoder(latent)
-        return reconstruction, latent
+            projected = self.projection_head(latent)
+            reconstruction = self.decoder(latent)   
+        return reconstruction, latent, projected
     
-    def compute_loss(self, original, reconstruction, latent_vecs):
+    def compute_loss(self, original, reconstruction, projected_vecs):
         original = original.to(self.device)
         reconstruction = reconstruction.to(self.device)
-        latent_vecs = latent_vecs.to(self.device)
+        projected_vecs = projected_vecs.to(self.device)
 
         original_rgb = original[:, :3, :, :]
         reconstruction_rgb = reconstruction[:, :3, :, :]
@@ -107,8 +109,7 @@ class Autoencoder(nn.Module):
 
             loss_recon = loss_pix + loss_grad
 
-            z_norm = F.normalize(latent_vecs, dim=1)
-            
+            z_norm = F.normalize(projected_vecs, dim=1)
             similarity = torch.matmul(z_norm, z_norm.T)
             
             mask = torch.eye(z_norm.shape[0], device=self.device).bool()
@@ -139,9 +140,9 @@ class Autoencoder(nn.Module):
             with torch.cuda.amp.autocast(enabled=self.use_amp):
                 augmented_img = self.augmenter(img)
                 
-                reconstruction, latent = self.forward(augmented_img)
+                reconstruction, _, projected = self.forward(augmented_img)
                 
-                loss = self.compute_loss(img, reconstruction, latent)
+                loss = self.compute_loss(img, reconstruction, projected)
 
             if torch.isnan(loss) or torch.isinf(loss):
                 continue
@@ -174,9 +175,9 @@ class Autoencoder(nn.Module):
             else:
                 img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
             
-            reconstruction, latent = self.forward(img)
+            reconstruction, _, projected = self.forward(img)
             
-            loss = self.compute_loss(img, reconstruction, latent)
+            loss = self.compute_loss(img, reconstruction, projected)
 
             epoch_loss += loss.item()
             epoch_recon_loss += loss.item()
@@ -300,13 +301,15 @@ class Autoencoder(nn.Module):
         if path.exists():
             timestamp = datetime.now().strftime("%H-%M-%S-%d-%m")
             old_path = path.parent / f"old-{timestamp}{path.suffix}"
-            path.rename(old_path)
-            print(f"Stary model przemianowany na: {old_path.name}")
+            try:
+                path.rename(old_path)
+                print(f"Stary model przemianowany na: {old_path.name}")
+            except OSError as e:
+                print(f"Nie udało się zmienić nazwy starego pliku: {e}")
         
         torch.save({
             'epoch': epoch,
-            'encoder_state_dict': self.encoder.state_dict(),
-            'decoder_state_dict': self.decoder.state_dict(),
+            'model_state_dict': self.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'scaler_state_dict': self.scaler.state_dict(),
@@ -315,14 +318,22 @@ class Autoencoder(nn.Module):
             'latent_dim': self.latent_dim
         }, path)
 
-    # function to load best model
     def load_checkpoint(self, path: Optional[Path] = None):
         if path is None:
             path = self.best_model_path
         
         checkpoint = torch.load(path, map_location=self.device)
-        self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
-        self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
+        
+        if 'model_state_dict' in checkpoint:
+            self.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            print("Wykryto stary format checkpointu. Ładowanie częściowe...")
+            if 'encoder_state_dict' in checkpoint:
+                self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
+            if 'decoder_state_dict' in checkpoint:
+                self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
+            print("UWAGA: Projection Head został zainicjalizowany losowo (nie był obecny w starym modelu).")
+
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
         if 'scheduler_state_dict' in checkpoint:
@@ -333,8 +344,8 @@ class Autoencoder(nn.Module):
         self.history = checkpoint.get('history', self.history)
         
         print(f"Model wczytany z: {path}")
-        print(f"Epoka: {checkpoint['epoch']}, Val Loss: {checkpoint['val_loss']:.6f}")
+        print(f"Epoka: {checkpoint.get('epoch', 0)}, Val Loss: {checkpoint.get('val_loss', 0.0):.6f}")
         
-        return checkpoint['epoch'], checkpoint['val_loss']
+        return checkpoint.get('epoch', 0), checkpoint.get('val_loss', 0.0)
 
 
