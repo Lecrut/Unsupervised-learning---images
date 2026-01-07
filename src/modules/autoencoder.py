@@ -5,13 +5,13 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from pathlib import Path
 import numpy as np
-from torchmetrics.image import StructuralSimilarityIndexMeasure
 from tqdm import tqdm
-from typing import Dict, Tuple, Optional, List
-import torchvision.models as models
+from typing import Dict, Tuple, Optional
 from datetime import datetime
 from .encoder import Encoder
 from .decoder import Decoder
+import torchvision.transforms as T
+import torch.nn.functional as F
 
 #%% Autoencoder Module - Optimized for WikiArt
 class Autoencoder(nn.Module):
@@ -34,6 +34,17 @@ class Autoencoder(nn.Module):
 
         self.encoder = Encoder(latent_dim, input_channels, image_size)
         self.decoder = Decoder(latent_dim, input_channels, image_size)
+
+        self.projection_head = nn.Sequential(
+            nn.Linear(latent_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, 128)
+        )
+
+        self.augmenter = nn.Sequential(
+            T.RandomResizedCrop(size=image_size, scale=(0.7, 1.0), ratio=(0.9, 1.1)),
+            T.RandomHorizontalFlip(p=0.5),
+        )
 
         self.to(self.device)
 
@@ -73,27 +84,39 @@ class Autoencoder(nn.Module):
             reconstruction = self.decoder(latent)
         return reconstruction, latent
     
-    def compute_loss(self, original, reconstruction):
+    def compute_loss(self, original, reconstruction, latent_vecs):
         original = original.to(self.device)
         reconstruction = reconstruction.to(self.device)
+        latent_vecs = latent_vecs.to(self.device)
 
         original_rgb = original[:, :3, :, :]
         reconstruction_rgb = reconstruction[:, :3, :, :]
         
         with torch.cuda.amp.autocast(enabled=self.use_amp):
-            # 1. Charbonnier Loss
             diff = reconstruction_rgb - original_rgb
             loss_pix = torch.mean(torch.sqrt(diff * diff + 1e-6))
             
-            # 2. Gradient Loss 
-            orig_dy = torch.abs(original_rgb[:, :, 1:, :] - original_rgb[:, :, :-1, :])
-            orig_dx = torch.abs(original_rgb[:, :, :, 1:] - original_rgb[:, :, :, :-1])
-            recon_dy = torch.abs(reconstruction_rgb[:, :, 1:, :] - reconstruction_rgb[:, :, :-1, :])
-            recon_dx = torch.abs(reconstruction_rgb[:, :, :, 1:] - reconstruction_rgb[:, :, :, :-1])
-            
+            def get_grads(x):
+                dy = torch.abs(x[:, :, 1:, :] - x[:, :, :-1, :])
+                dx = torch.abs(x[:, :, :, 1:] - x[:, :, :, :-1])
+                return dy, dx
+                
+            orig_dy, orig_dx = get_grads(original_rgb)
+            recon_dy, recon_dx = get_grads(reconstruction_rgb)
             loss_grad = torch.mean(torch.abs(orig_dy - recon_dy)) + torch.mean(torch.abs(orig_dx - recon_dx))
 
-            total_loss = loss_pix + loss_grad
+            loss_recon = loss_pix + loss_grad
+
+            z_norm = F.normalize(latent_vecs, dim=1)
+            
+            similarity = torch.matmul(z_norm, z_norm.T)
+            
+            mask = torch.eye(z_norm.shape[0], device=self.device).bool()
+            similarity.masked_fill_(mask, 0)
+            
+            loss_separation = torch.mean(similarity ** 2)
+
+            total_loss = loss_recon + (0.1 * loss_separation)
 
         return total_loss
 
@@ -109,37 +132,36 @@ class Autoencoder(nn.Module):
                 img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
             
             if torch.isnan(img).any() or torch.isinf(img).any():
-                print("Wykryto NaN/Inf w danych wejściowych! Pomijam batch.")
                 continue
 
             self.optimizer.zero_grad(set_to_none=True)
             
             with torch.cuda.amp.autocast(enabled=self.use_amp):
-                reconstruction, _ = self.forward(img)
-                loss = self.compute_loss(img, reconstruction)
+                augmented_img = self.augmenter(img)
+                
+                reconstruction, latent = self.forward(augmented_img)
+                
+                loss = self.compute_loss(img, reconstruction, latent)
 
             if torch.isnan(loss) or torch.isinf(loss):
-                print(f"Wykryto NaN w Loss: {loss.item()}. Pomijam krok.")
                 continue
 
             self.scaler.scale(loss).backward()
-
             self.scaler.unscale_(self.optimizer)
-            
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-            
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
             self.scheduler.step()
 
             epoch_loss += loss.item()
-            epoch_recon_loss += loss.item()
+            epoch_recon_loss += loss.item() 
         
         return {
             'loss': epoch_loss / len(dataloader),
             'recon_loss': epoch_recon_loss / len(dataloader)
         }
+    
     @torch.no_grad()
     def validate_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
         self.eval()
@@ -152,8 +174,9 @@ class Autoencoder(nn.Module):
             else:
                 img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
             
-            reconstruction, _ = self.forward(img)
-            loss = self.compute_loss(img, reconstruction)
+            reconstruction, latent = self.forward(img)
+            
+            loss = self.compute_loss(img, reconstruction, latent)
 
             epoch_loss += loss.item()
             epoch_recon_loss += loss.item()
