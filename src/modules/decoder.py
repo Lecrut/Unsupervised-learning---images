@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 class Decoder(nn.Module):
@@ -10,32 +9,37 @@ class Decoder(nn.Module):
         self.fc = nn.Linear(latent_dim, 512 * 8 * 8)
         self.unflatten = nn.Unflatten(1, (512, 8, 8))
         
-        self.deconv1 = nn.ConvTranspose2d(512, 512, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(512)
-        self.act1 = nn.GELU()
+        def decoder_block(in_c, out_c):
+            return nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='nearest'), 
+                nn.Conv2d(in_c, out_c, kernel_size=3, padding=1, bias=False), 
+                nn.BatchNorm2d(out_c),
+                nn.GELU()
+            )
+
+        # 8 -> 16
+        self.block1 = decoder_block(512, 512)
+        # 16 -> 32
+        self.block2 = decoder_block(512, 256)
+        # 32 -> 64
+        self.block3 = decoder_block(256, 128)
+        # 64 -> 128
+        self.block4 = decoder_block(128, 64)
+        # 128 -> 256
+        self.block5 = decoder_block(64, 32)
         
-        self.deconv2 = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(256)
-        self.act2 = nn.GELU()
-        
-        self.deconv3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn3 = nn.BatchNorm2d(128)
-        self.act3 = nn.GELU()
-        
-        self.deconv4 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn4 = nn.BatchNorm2d(64)
-        self.act4 = nn.GELU()
-        
-        self.deconv5 = nn.ConvTranspose2d(64, output_channels, kernel_size=4, stride=2, padding=1)
+        # Output
+        self.final_conv = nn.Conv2d(32, output_channels, kernel_size=3, padding=1)
         self.out_act = nn.Sigmoid()
     
     def forward(self, latent):
         x = self.unflatten(self.fc(latent))
         
-        x = self.act1(self.bn1(self.deconv1(x)))
-        x = self.act2(self.bn2(self.deconv2(x)))
-        x = self.act3(self.bn3(self.deconv3(x)))
-        x = self.act4(self.bn4(self.deconv4(x)))
-        x = self.out_act(self.deconv5(x))
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.block4(x)
+        x = self.block5(x)
         
+        x = self.out_act(self.final_conv(x))
         return x
