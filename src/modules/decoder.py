@@ -25,9 +25,7 @@ class Decoder(nn.Module):
         self.bn4 = nn.BatchNorm2d(64)
         self.act4 = nn.GELU()
         
-        self.final_conv = nn.Conv2d(64, output_channels * 4, kernel_size=3, padding=1)
-        self.pixel_shuffle = nn.PixelShuffle(2) 
-        
+        self.deconv5 = nn.ConvTranspose2d(64, output_channels, kernel_size=4, stride=2, padding=1)
         self.out_act = nn.Sigmoid()
     
     def forward(self, latent):
@@ -37,8 +35,6 @@ class Decoder(nn.Module):
         x = self.act2(self.bn2(self.deconv2(x)))
         x = self.act3(self.bn3(self.deconv3(x)))
         x = self.act4(self.bn4(self.deconv4(x)))
-        
-        x = self.pixel_shuffle(self.final_conv(x))
-        x = self.out_act(x)
+        x = self.out_act(self.deconv5(x))
         
         return x
