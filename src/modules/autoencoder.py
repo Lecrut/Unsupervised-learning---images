@@ -41,7 +41,7 @@ class Autoencoder(nn.Module):
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer, T_0=10, T_mult=2, eta_min=1e-6
         )
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.scaler = torch.amp.GradScaler('cuda', enabled=self.use_amp)
         
 
         self.history = {
@@ -68,7 +68,7 @@ class Autoencoder(nn.Module):
                     self.model_loaded = False
     
     def forward(self, x):
-        with torch.cuda.amp.autocast(enabled=self.use_amp):
+        with torch.amp.autocast('cuda', enabled=self.use_amp):
             latent, _ = self.encoder(x)
             reconstruction = self.decoder(latent)
         return reconstruction, latent
@@ -118,7 +118,7 @@ class Autoencoder(nn.Module):
 
             self.optimizer.zero_grad(set_to_none=True)
 
-            with torch.cuda.amp.autocast(enabled=self.use_amp):
+            with torch.amp.autocast('cuda', enabled=self.use_amp):
                 reconstruction, latent = self.forward(img)
                 loss = self.compute_loss(img, reconstruction, latent)
 
@@ -132,6 +132,10 @@ class Autoencoder(nn.Module):
             self.scaler.update()
 
             epoch_loss += loss.item()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
         return {
             'loss': epoch_loss / len(dataloader),
@@ -143,16 +147,25 @@ class Autoencoder(nn.Module):
         self.eval()
         epoch_loss = 0.0
 
-        for batch in tqdm(dataloader, desc="Validation Epoch"):
+        for i, batch in enumerate(tqdm(dataloader, desc="Validation Epoch")):
             if isinstance(batch, dict):
-                img = batch['image'].to(self.device, non_blocking=True)
+                img = batch['image'].to(self.device, non_blocking=False)
             else:
-                img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
+                img = batch[0].to(self.device, non_blocking=False) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=False)
 
             reconstruction, latent = self.forward(img)
             loss = self.compute_loss(img, reconstruction, latent)
 
             epoch_loss += loss.item()
+            
+            del img, reconstruction, latent, loss
+            
+            if i % 10 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
         return {
             'loss': epoch_loss / len(dataloader),

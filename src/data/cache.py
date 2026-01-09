@@ -43,7 +43,7 @@ class ImageFolderDataset(Dataset):
             return self.to_tensor(img)
 
 #%% Create DataLoader from images in a folder
-def create_image_dataloader(folder, batch_size=128, num_workers=10, augmentation=False):
+def create_image_dataloader(folder, batch_size=128, num_workers=4, augmentation=False):
     print(f"Tworzenie DataLoadera z obrazów w {folder}")
     dataset = ImageFolderDataset(folder, augmentation=augmentation)
     print(f"Liczba obrazów w zbiorze: {len(dataset)}")
@@ -84,7 +84,7 @@ def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=Fal
     batch_size_chunk = 10  
 
     total_batches = len(damaged_loader)
-    num_workers = min(cpu_count(), 10) 
+    num_workers = min(cpu_count(), 4) 
 
     with Pool(num_workers) as pool:
         batch_idx = 0

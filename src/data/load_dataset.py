@@ -93,7 +93,7 @@ class PairedImageDatasetWrapper(torch.utils.data.Dataset):
         return self.to_tensor(lr_patch), self.to_tensor(hr_patch)
 
 #%% Load dataset and create DataLoaders
-def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, add_fourth_channel=False, use_bigger_image=False):
+def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=4, add_fourth_channel=False, use_bigger_image=False):
     image_size = IMAGE_SIZE_BIGGER if use_bigger_image else IMAGE_SIZE
     
     dataset = load_dataset(DATASET_NAME, split='train')
@@ -124,7 +124,7 @@ def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=10, 
     return train_loader, test_loader, val_loader
 
 #%% Load paired dataset and create DataLoaders
-def load_paired_data(train_split=0.7, test_split=0.15, batch_size=64, num_workers=10, patch_size=48, scale_factor=2):
+def load_paired_data(train_split=0.7, test_split=0.15, batch_size=64, num_workers=4, patch_size=48, scale_factor=2):
     dataset = load_dataset(DATASET_NAME, split='train')
     
     train_size = int(len(dataset) * train_split)
