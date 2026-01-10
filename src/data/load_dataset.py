@@ -1,4 +1,5 @@
 #%% Imports
+import os
 from datasets import load_dataset
 from torchvision import transforms
 from torch.utils.data import DataLoader, Subset, ConcatDataset
@@ -9,6 +10,7 @@ from functools import partial
 DATASET_NAME = "huggan/wikiart"
 IMAGE_SIZE = 256
 IMAGE_SIZE_BIGGER = 512
+NUM_WORKERS = max(1, (os.cpu_count() - 2) // 2)
 
 #%% Check device - Cuda
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -93,7 +95,7 @@ class PairedImageDatasetWrapper(torch.utils.data.Dataset):
         return self.to_tensor(lr_patch), self.to_tensor(hr_patch)
 
 #%% Load dataset and create DataLoaders
-def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=4, add_fourth_channel=False, use_bigger_image=False):
+def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=NUM_WORKERS, add_fourth_channel=False, use_bigger_image=False):
     image_size = IMAGE_SIZE_BIGGER if use_bigger_image else IMAGE_SIZE
     
     dataset = load_dataset(DATASET_NAME, split='train')
@@ -124,7 +126,7 @@ def load_data(train_split=0.7, test_split=0.15, batch_size=128, num_workers=4, a
     return train_loader, test_loader, val_loader
 
 #%% Load paired dataset and create DataLoaders
-def load_paired_data(train_split=0.7, test_split=0.15, batch_size=64, num_workers=4, patch_size=48, scale_factor=2):
+def load_paired_data(train_split=0.7, test_split=0.15, batch_size=64, num_workers=NUM_WORKERS, patch_size=48, scale_factor=2):
     dataset = load_dataset(DATASET_NAME, split='train')
     
     train_size = int(len(dataset) * train_split)

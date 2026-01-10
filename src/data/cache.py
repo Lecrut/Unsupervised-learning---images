@@ -17,6 +17,7 @@ from src.data.damage import make_damage_loader
 #%% Constants directories
 DATASET_DIR = 'data/dataset'
 DAMAGED_DATASET_DIR = 'data/damaged_dataset'
+NUM_WORKERS = max(1, (os.cpu_count() - 2) // 2)
 
 #%% Check device - Cuda
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -43,7 +44,7 @@ class ImageFolderDataset(Dataset):
             return self.to_tensor(img)
 
 #%% Create DataLoader from images in a folder
-def create_image_dataloader(folder, batch_size=128, num_workers=4, augmentation=False):
+def create_image_dataloader(folder, batch_size=128, num_workers=NUM_WORKERS, augmentation=False):
     print(f"Tworzenie DataLoadera z obrazów w {folder}")
     dataset = ImageFolderDataset(folder, augmentation=augmentation)
     print(f"Liczba obrazów w zbiorze: {len(dataset)}")
@@ -84,7 +85,7 @@ def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=Fal
     batch_size_chunk = 10  
 
     total_batches = len(damaged_loader)
-    num_workers = min(cpu_count(), 4) 
+    num_workers = NUM_WORKERS
 
     with Pool(num_workers) as pool:
         batch_idx = 0
