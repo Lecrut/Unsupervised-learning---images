@@ -80,18 +80,22 @@ class Autoencoder(nn.Module):
         target_rgb = target[:, :3, :, :].to(self.device)
         recon_rgb = reconstruction[:, :3, :, :].to(self.device)
 
-        loss_pix = F.l1_loss(recon_rgb, target_rgb)
-        
-        # pełne różnice sąsiadów w pionie i poziomie dla mocniejszego nacisku na krawędzie
-        target_dy = target_rgb[:, :, 1:, :] - target_rgb[:, :, :-1, :]
-        recon_dy = recon_rgb[:, :, 1:, :] - recon_rgb[:, :, :-1, :]
-        
-        target_dx = target_rgb[:, :, :, 1:] - target_rgb[:, :, :, :-1]
-        recon_dx = recon_rgb[:, :, :, 1:] - recon_rgb[:, :, :, :-1]
-        
-        loss_grad = F.l1_loss(recon_dy, target_dy) + F.l1_loss(recon_dx, target_dx)
+        with torch.amp.autocast('cuda', enabled=self.use_amp):
+            # 1. Charbonnier Loss
+            diff = recon_rgb - target_rgb
+            loss_pix = torch.mean(torch.sqrt(diff * diff + 1e-6))
+            
+            # 2. Gradient Loss 
+            orig_dy = torch.abs(target_rgb[:, :, 1:, :] - target_rgb[:, :, :-1, :])
+            orig_dx = torch.abs(target_rgb[:, :, :, 1:] - target_rgb[:, :, :, :-1])
+            recon_dy = torch.abs(recon_rgb[:, :, 1:, :] - recon_rgb[:, :, :-1, :])
+            recon_dx = torch.abs(recon_rgb[:, :, :, 1:] - recon_rgb[:, :, :, :-1])
+            
+            loss_grad = torch.mean(torch.abs(orig_dy - recon_dy)) + torch.mean(torch.abs(orig_dx - recon_dx))
 
-        return loss_pix + 1.2 * loss_grad
+            total_loss = loss_pix + loss_grad
+
+        return total_loss
   
     
     def latent_variance_loss(self, z, eps=1e-4):
