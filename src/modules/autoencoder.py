@@ -33,7 +33,9 @@ class Autoencoder(nn.Module):
         self.model_loaded = False
 
         self.encoder = Encoder(latent_dim, input_channels, image_size)
-        self.decoder = Decoder(latent_dim, input_channels, image_size)
+        # self.decoder = Decoder(latent_dim, input_channels, image_size)
+        # Decoder odtwarza tylko RGB – maska nie jest rekonstruowana
+        self.decoder = Decoder(latent_dim, output_channels=3, image_size=image_size)
 
         self.to(self.device)
 
@@ -80,15 +82,16 @@ class Autoencoder(nn.Module):
 
         loss_pix = F.l1_loss(recon_rgb, target_rgb)
         
-        target_dy = target_rgb[:, :, 1::2, ::2] - target_rgb[:, :, :-1:2, ::2]
-        recon_dy = recon_rgb[:, :, 1::2, ::2] - recon_rgb[:, :, :-1:2, ::2]
+        # pełne różnice sąsiadów w pionie i poziomie dla mocniejszego nacisku na krawędzie
+        target_dy = target_rgb[:, :, 1:, :] - target_rgb[:, :, :-1, :]
+        recon_dy = recon_rgb[:, :, 1:, :] - recon_rgb[:, :, :-1, :]
         
-        target_dx = target_rgb[:, :, ::2, 1::2] - target_rgb[:, :, ::2, :-1:2]
-        recon_dx = recon_rgb[:, :, ::2, 1::2] - recon_rgb[:, :, ::2, :-1:2]
+        target_dx = target_rgb[:, :, :, 1:] - target_rgb[:, :, :, :-1]
+        recon_dx = recon_rgb[:, :, :, 1:] - recon_rgb[:, :, :, :-1]
         
         loss_grad = F.l1_loss(recon_dy, target_dy) + F.l1_loss(recon_dx, target_dx)
 
-        return loss_pix + (1 * loss_grad)
+        return loss_pix + 1.2 * loss_grad
   
     
     def latent_variance_loss(self, z, eps=1e-4):

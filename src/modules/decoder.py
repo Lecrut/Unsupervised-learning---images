@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class Decoder(nn.Module):
-    def __init__(self, latent_dim=1024, output_channels=4, image_size=256):
+    def __init__(self, latent_dim=1024, output_channels=3, image_size=256):
         super().__init__()
 
         self.fc = nn.Linear(latent_dim, 512 * 8 * 8)
