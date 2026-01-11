@@ -33,7 +33,9 @@ class Autoencoder(nn.Module):
         self.model_loaded = False
 
         self.encoder = Encoder(latent_dim, input_channels, image_size)
-        self.decoder = Decoder(latent_dim, input_channels, image_size)
+        # self.decoder = Decoder(latent_dim, input_channels, image_size)
+        # Decoder odtwarza tylko RGB – maska nie jest rekonstruowana
+        self.decoder = Decoder(latent_dim, output_channels=3, image_size=image_size)
 
         self.to(self.device)
 
@@ -78,17 +80,22 @@ class Autoencoder(nn.Module):
         target_rgb = target[:, :3, :, :].to(self.device)
         recon_rgb = reconstruction[:, :3, :, :].to(self.device)
 
-        loss_pix = F.l1_loss(recon_rgb, target_rgb)
-        
-        target_dy = target_rgb[:, :, 1::2, ::2] - target_rgb[:, :, :-1:2, ::2]
-        recon_dy = recon_rgb[:, :, 1::2, ::2] - recon_rgb[:, :, :-1:2, ::2]
-        
-        target_dx = target_rgb[:, :, ::2, 1::2] - target_rgb[:, :, ::2, :-1:2]
-        recon_dx = recon_rgb[:, :, ::2, 1::2] - recon_rgb[:, :, ::2, :-1:2]
-        
-        loss_grad = F.l1_loss(recon_dy, target_dy) + F.l1_loss(recon_dx, target_dx)
+        with torch.amp.autocast('cuda', enabled=self.use_amp):
+            # 1. Charbonnier Loss
+            diff = recon_rgb - target_rgb
+            loss_pix = torch.mean(torch.sqrt(diff * diff + 1e-6))
+            
+            # 2. Gradient Loss 
+            orig_dy = torch.abs(target_rgb[:, :, 1:, :] - target_rgb[:, :, :-1, :])
+            orig_dx = torch.abs(target_rgb[:, :, :, 1:] - target_rgb[:, :, :, :-1])
+            recon_dy = torch.abs(recon_rgb[:, :, 1:, :] - recon_rgb[:, :, :-1, :])
+            recon_dx = torch.abs(recon_rgb[:, :, :, 1:] - recon_rgb[:, :, :, :-1])
+            
+            loss_grad = torch.mean(torch.abs(orig_dy - recon_dy)) + torch.mean(torch.abs(orig_dx - recon_dx))
 
-        return loss_pix + (0.5 * loss_grad)
+            total_loss = loss_pix + loss_grad
+
+        return total_loss
   
     
     def latent_variance_loss(self, z, eps=1e-4):
@@ -132,10 +139,6 @@ class Autoencoder(nn.Module):
             self.scaler.update()
 
             epoch_loss += loss.item()
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
 
         return {
             'loss': epoch_loss / len(dataloader),
@@ -149,23 +152,14 @@ class Autoencoder(nn.Module):
 
         for i, batch in enumerate(tqdm(dataloader, desc="Validation Epoch")):
             if isinstance(batch, dict):
-                img = batch['image'].to(self.device, non_blocking=False)
+                img = batch['image'].to(self.device, non_blocking=True)
             else:
-                img = batch[0].to(self.device, non_blocking=False) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=False)
+                img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
 
             reconstruction, latent = self.forward(img)
             loss = self.compute_loss(img, reconstruction, latent)
 
             epoch_loss += loss.item()
-            
-            del img, reconstruction, latent, loss
-            
-            if i % 10 == 0 and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
 
         return {
             'loss': epoch_loss / len(dataloader),
