@@ -94,6 +94,9 @@ class Autoencoder(nn.Module):
                 loss, recon_loss_val = self.compute_loss(img, recon, latent)
 
             self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer) 
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
