@@ -171,11 +171,11 @@ class Autoencoder(nn.Module):
             epochs: int = 50,
             early_stopping_patience: int = 15):
         
-        if torch.__version__ >= "2.0.0":
-            print("Kompilowanie modelu (to może chwilę potrwać)...")
-            self.encoder = torch.compile(self.encoder, backend="cudagraphs")
-            self.decoder = torch.compile(self.decoder, backend="cudagraphs")
-            print("Kompilowanie zakończone.")
+        # if torch.__version__ >= "2.0.0":
+        #     print("Kompilowanie modelu (to może chwilę potrwać)...")
+        #     self.encoder = torch.compile(self.encoder, backend="cudagraphs")
+        #     self.decoder = torch.compile(self.decoder, backend="cudagraphs")
+        #     print("Kompilowanie zakończone.")
 
         best_val_loss = float('inf')
         patience_counter = 0
