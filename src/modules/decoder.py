@@ -15,7 +15,7 @@ class Decoder(nn.Module):
 
         def up_block(in_c, out_c):
             return nn.Sequential(
-                nn.Upsample(scale_factor=2, mode='nearest'),
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
                 nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
                 nn.BatchNorm2d(out_c),
                 nn.LeakyReLU(0.2, inplace=True)
@@ -38,7 +38,7 @@ class Decoder(nn.Module):
             up_block(64, 32),
             
             # 128 -> 256
-            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Upsample(scale_factor=2, mode='bilinear'),
             nn.Conv2d(32, output_channels, kernel_size=3, padding=1),
             nn.Sigmoid() 
         )

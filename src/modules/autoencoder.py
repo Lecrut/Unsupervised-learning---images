@@ -68,7 +68,7 @@ class Autoencoder(nn.Module):
         if self.ssim_loss:
             loss_ssim = self.ssim_loss(reconstruction, target_rgb)
             loss_l1 = self.l1_loss(reconstruction, target_rgb)
-            loss_recon = 0.75 * loss_ssim + 0.25 * loss_l1
+            loss_recon = 0.7 * loss_ssim + 0.3 * loss_l1
         else:
             loss_recon = self.l1_loss(reconstruction, target_rgb)
 
@@ -77,7 +77,7 @@ class Autoencoder(nn.Module):
              std = torch.sqrt(latent.var(dim=0) + 1e-4)
              loss_var = torch.mean(F.relu(1.0 - std)) 
 
-        return loss_recon + 0.0001 * loss_var, loss_recon
+        return loss_recon + 0.01 * loss_var, loss_recon
 
     def train_epoch(self, dataloader):
         self.train()
