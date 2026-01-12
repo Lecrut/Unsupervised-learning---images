@@ -15,11 +15,11 @@ class Decoder(nn.Module):
 
         def up_block(in_c, out_c):
             return nn.Sequential(
-                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-                nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
-                nn.BatchNorm2d(out_c),
-                nn.LeakyReLU(0.2, inplace=True)
-            )
+            nn.Conv2d(in_c, out_c * 4, kernel_size=3, padding=1),
+            nn.PixelShuffle(upscale_factor=2), 
+            nn.BatchNorm2d(out_c),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
 
         self.net = nn.Sequential(
             # Start: 4x4 -> 8x8
