@@ -18,33 +18,33 @@ def _ensure_numpy(data):
         return data.cpu().detach().numpy()
     return np.asarray(data)
 
-def our_pca(latent_damaged, latent_original, n_components=2):
-    X = _ensure_numpy(latent_damaged)
-    Y = _ensure_numpy(latent_original)
-    combined = np.vstack([X, Y])
+# def our_pca(latent_damaged, latent_original, n_components=2):
+#     X = _ensure_numpy(latent_damaged)
+#     Y = _ensure_numpy(latent_original)
+#     combined = np.vstack([X, Y])
 
-    scaler = StandardScaler()
-    combined_scaled = scaler.fit_transform(combined)
+#     scaler = StandardScaler()
+#     combined_scaled = scaler.fit_transform(combined)
 
-    print(f"Redukcja UMAP do {n_components} wymiarów (tryb wizualny)...")
+#     print(f"Redukcja UMAP do {n_components} wymiarów (tryb wizualny)...")
     
-    reducer = umap.UMAP(
-        n_components=n_components,
-        n_neighbors=15,    
-        min_dist=0.1,        
-        metric='cosine',     
-        init='spectral',     
-        n_jobs=-1,
-        random_state=42
-    )
+#     reducer = umap.UMAP(
+#         n_components=n_components,
+#         n_neighbors=15,    
+#         min_dist=0.1,        
+#         metric='cosine',     
+#         init='spectral',     
+#         n_jobs=-1,
+#         random_state=42
+#     )
     
-    transformed = reducer.fit_transform(combined_scaled)
+#     transformed = reducer.fit_transform(combined_scaled)
 
-    min_max = MinMaxScaler()
-    transformed = min_max.fit_transform(transformed)
+#     min_max = MinMaxScaler()
+#     transformed = min_max.fit_transform(transformed)
 
-    n_damaged = len(X)
-    return transformed[:n_damaged], transformed[n_damaged:]
+#     n_damaged = len(X)
+#     return transformed[:n_damaged], transformed[n_damaged:]
 
 #%% Clustering - The Visual Cutter
 def clustering(latent_damaged, latent_original, n_clusters=20): 
