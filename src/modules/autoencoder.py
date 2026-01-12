@@ -33,8 +33,7 @@ class Autoencoder(nn.Module):
         self.encoder = Encoder(latent_dim, input_channels, image_size)
         self.decoder = Decoder(latent_dim, output_channels=3, image_size=image_size)
 
-        self.sobel = K.filters.Sobel()
-        self.ssim_loss = K.losses.SSIMLoss(window_size=11, reduction='mean')
+        self.lap = K.filters.Laplacian(kernel_size=5, normalized=True)
         self.l1_loss = nn.L1Loss()
 
         self.to(self.device)
@@ -63,24 +62,30 @@ class Autoencoder(nn.Module):
 
     def compute_loss(self, target, reconstruction, latent):
         target_rgb = target[:, :3, :, :]
-        reconstruction_clamped = torch.clamp(reconstruction, 0, 1)
 
-        loss_l1 = self.l1_loss(reconstruction, target_rgb)
-        loss_ssim = self.ssim_loss(reconstruction_clamped, target_rgb)
+        loss_l1 = F.l1_loss(reconstruction, target_rgb)
 
-        target_grad = self.sobel(target_rgb)
-        recon_grad = self.sobel(reconstruction)
+        with torch.cuda.amp.autocast(enabled=False):
+            lap_recon = self.lap(reconstruction.float())
+            lap_target = self.lap(target_rgb.float()).detach()
+            loss_hf = F.l1_loss(lap_recon, lap_target)
 
-        loss_edge = self.l1_loss(recon_grad, target_grad)
-
-        loss_recon = 1.0 * loss_l1 + 0.5 * loss_ssim + 0.5 * loss_edge
-
-        loss_var = 0.0
+        loss_latent = 0.0
         if latent is not None:
-             std = torch.sqrt(latent.var(dim=0) + 1e-4)
-             loss_var = torch.mean(F.relu(1.0 - std)) 
+            z = latent - latent.mean(dim=0, keepdim=True)
+            z = F.normalize(z, dim=1)
+            sim = z @ z.T
+            sim = sim - torch.eye(z.size(0), device=z.device)
+            loss_latent = sim.pow(2).mean()
 
-        return loss_recon + 0.01 * loss_var, loss_recon
+        loss = (
+            1.0 * loss_l1 +
+            0.4 * loss_hf +
+            0.05 * loss_latent
+        )
+
+        return loss, loss_l1
+
 
     def train_epoch(self, dataloader):
         self.train()
