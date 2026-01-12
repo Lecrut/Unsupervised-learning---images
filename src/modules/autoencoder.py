@@ -93,13 +93,13 @@ class Autoencoder(nn.Module):
                 recon, latent = self.forward(img)
                 loss, recon_loss_val = self.compute_loss(img, recon, latent)
 
-            if torch.isnan(loss) or torch.isinf(loss):
-                print(f"NaN/Inf detected! Skipping batch")
-                continue
-
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer) 
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"NaN/Inf detected! Skipping batch")
+                continue
 
             self.scaler.step(self.optimizer)
             self.scaler.update()
