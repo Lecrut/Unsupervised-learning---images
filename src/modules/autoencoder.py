@@ -1,4 +1,3 @@
-#%% Imports
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,15 +9,14 @@ from typing import Dict, Tuple, Optional
 from datetime import datetime
 from .encoder import Encoder
 from .decoder import Decoder
-import torchvision.transforms as T
 import torch.nn.functional as F
+import kornia.losses as K
 
-#%% Autoencoder Module - Optimized for WikiArt
 class Autoencoder(nn.Module):
     def __init__(self, 
-                 latent_dim=768, 
+                 latent_dim=2048, 
                  input_channels=4, 
-                 learning_rate=3e-4, 
+                 learning_rate=1e-3,  
                  image_size=256, 
                  use_amp=True, 
                  load_best=False
@@ -28,157 +26,118 @@ class Autoencoder(nn.Module):
         self.input_channels = input_channels
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.use_amp = use_amp and torch.cuda.is_available()
-        self.load_best = load_best
         self.best_model_path = Path('checkpoints/best_autoencoder.pt')
         self.model_loaded = False
 
         self.encoder = Encoder(latent_dim, input_channels, image_size)
-        # self.decoder = Decoder(latent_dim, input_channels, image_size)
-        # Decoder odtwarza tylko RGB – maska nie jest rekonstruowana
         self.decoder = Decoder(latent_dim, output_channels=3, image_size=image_size)
 
         self.to(self.device)
 
-        self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=0.01)
-        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            self.optimizer, T_0=10, T_mult=2, eta_min=1e-6
+        self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=1e-4)
+    
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-6
         )
-        self.scaler = torch.amp.GradScaler('cuda', enabled=self.use_amp)
         
+        self.scaler = torch.amp.GradScaler('cuda', enabled=self.use_amp)
+
+        self.ssim_loss = K.SSIMLoss(window_size=11, reduction='mean')
+        
+        self.l1_loss = nn.L1Loss()
 
         self.history = {
-            'train_loss': [],
-            'val_loss': [],
-            'train_recon_loss': [],
-            'val_recon_loss': [],
+            'train_loss': [], 'val_loss': [], 
+            'train_recon_loss': [], 'val_recon_loss': [],
             'learning_rates': []
         }
 
-        if load_best:
-            if not self.best_model_path.exists():
-                print(f"Brak zapisanego modelu w {self.best_model_path}")
-                print("Model zostanie wytrenowany od nowa")
-                self.model_loaded = False
-            else:
-                try:
-                    self.load_checkpoint()
-                    self.model_loaded = True
-                    print("Model wczytany pomyslnie")
-                except Exception as e:
-                    print(f"Blad podczas wczytywania modelu: {e}")
-                    print("Model zostanie wytrenowany od nowa")
-                    self.model_loaded = False
-    
+        if load_best and self.best_model_path.exists():
+            self.load_checkpoint()
+            self.model_loaded = True
+
     def forward(self, x):
         with torch.amp.autocast('cuda', enabled=self.use_amp):
             latent, _ = self.encoder(x)
             reconstruction = self.decoder(latent)
         return reconstruction, latent
 
-    
-    def compute_reconstruction_loss(self, target, reconstruction):
-        target_rgb = target[:, :3, :, :].to(self.device)
-        recon_rgb = reconstruction[:, :3, :, :].to(self.device)
+    def compute_loss(self, target, reconstruction, latent):
+        target_rgb = target[:, :3, :, :]
+        
+        if self.ssim_loss:
+            loss_ssim = self.ssim_loss(reconstruction, target_rgb)
+            loss_l1 = self.l1_loss(reconstruction, target_rgb)
+            loss_recon = 0.7 * loss_ssim + 0.3 * loss_l1
+        else:
+            loss_recon = self.l1_loss(reconstruction, target_rgb)
 
-        with torch.amp.autocast('cuda', enabled=self.use_amp):
-            # 1. Charbonnier Loss
-            diff = recon_rgb - target_rgb
-            loss_pix = torch.mean(torch.sqrt(diff * diff + 1e-6))
-            
-            # 2. Gradient Loss 
-            orig_dy = torch.abs(target_rgb[:, :, 1:, :] - target_rgb[:, :, :-1, :])
-            orig_dx = torch.abs(target_rgb[:, :, :, 1:] - target_rgb[:, :, :, :-1])
-            recon_dy = torch.abs(recon_rgb[:, :, 1:, :] - recon_rgb[:, :, :-1, :])
-            recon_dx = torch.abs(recon_rgb[:, :, :, 1:] - recon_rgb[:, :, :, :-1])
-            
-            loss_grad = torch.mean(torch.abs(orig_dy - recon_dy)) + torch.mean(torch.abs(orig_dx - recon_dx))
+        loss_var = 0.0
+        if latent is not None:
+             std = torch.sqrt(latent.var(dim=0) + 1e-4)
+             loss_var = torch.mean(F.relu(1.0 - std)) 
 
-            total_loss = loss_pix + loss_grad
+        return loss_recon + 0.01 * loss_var, loss_recon
 
-        return total_loss
-  
-    
-    def latent_variance_loss(self, z, eps=1e-4):
-        std = torch.sqrt(z.var(dim=0) + eps)
-        return torch.mean(F.relu(1.0 - std))
-
-
-    def compute_loss(self, img, reconstruction, latent, lambda_var=0.01):
-        loss_recon = self.compute_reconstruction_loss(img, reconstruction)
-        loss_var = self.latent_variance_loss(latent)
-
-        return loss_recon + lambda_var * loss_var
-
-
-    def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
+    def train_epoch(self, dataloader):
         self.train()
         epoch_loss = 0.0
+        epoch_recon = 0.0
 
-        for batch in tqdm(dataloader, desc="Training Epoch"):
-            if isinstance(batch, dict):
-                img = batch['image'].to(self.device, non_blocking=True)
-            else:
-                img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
-
-            if torch.isnan(img).any() or torch.isinf(img).any():
-                continue
-
+        for batch in tqdm(dataloader, desc="Training"):
+            img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device)
+            
             self.optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast('cuda', enabled=self.use_amp):
-                reconstruction, latent = self.forward(img)
-                loss = self.compute_loss(img, reconstruction, latent)
-
-            if torch.isnan(loss) or torch.isinf(loss):
-                continue
+                recon, latent = self.forward(img)
+                loss, recon_loss_val = self.compute_loss(img, recon, latent)
 
             self.scaler.scale(loss).backward()
-            self.scaler.unscale_(self.optimizer)
+            self.scaler.unscale_(self.optimizer) 
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"NaN/Inf detected! Skipping batch")
+                continue
+
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
             epoch_loss += loss.item()
+            epoch_recon += recon_loss_val.item()
 
         return {
             'loss': epoch_loss / len(dataloader),
-            'recon_loss': epoch_loss / len(dataloader)
+            'recon_loss': epoch_recon / len(dataloader)
         }
 
     @torch.no_grad()
-    def validate_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
+    def validate_epoch(self, dataloader):
         self.eval()
         epoch_loss = 0.0
+        epoch_recon = 0.0
 
-        for i, batch in enumerate(tqdm(dataloader, desc="Validation Epoch")):
-            if isinstance(batch, dict):
-                img = batch['image'].to(self.device, non_blocking=True)
-            else:
-                img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device, non_blocking=True)
-
-            reconstruction, latent = self.forward(img)
-            loss = self.compute_loss(img, reconstruction, latent)
+        for batch in tqdm(dataloader, desc="Validation"):
+            img = batch[0].to(self.device, non_blocking=True) if isinstance(batch, (list, tuple)) else batch.to(self.device)
+            
+            recon, latent = self.forward(img)
+            loss, recon_loss_val = self.compute_loss(img, recon, latent)
 
             epoch_loss += loss.item()
+            epoch_recon += recon_loss_val.item()
 
         return {
             'loss': epoch_loss / len(dataloader),
-            'recon_loss': epoch_loss / len(dataloader)
+            'recon_loss': epoch_recon / len(dataloader)
         }
 
 
-    def fit(self, train_loader: DataLoader, val_loader: Optional[DataLoader] = None, 
-            epochs: int = 50,
-            early_stopping_patience: int = 15):
-        
-        # if torch.__version__ >= "2.0.0":
-        #     print("Kompilowanie modelu (to może chwilę potrwać)...")
-        #     self.encoder = torch.compile(self.encoder, backend="cudagraphs")
-        #     self.decoder = torch.compile(self.decoder, backend="cudagraphs")
-        #     print("Kompilowanie zakończone.")
-
+    def fit(self, train_loader, val_loader=None, epochs=30, early_stopping_patience=10):
         best_val_loss = float('inf')
         patience_counter = 0
+
+        print(f"Start treningu na: {self.device} z SSIM+L1 Loss")
 
         for epoch in range(epochs):
             print(f"\nEpoka {epoch + 1}/{epochs}")
@@ -188,151 +147,58 @@ class Autoencoder(nn.Module):
 
             self.history['train_loss'].append(train_metrics['loss'])
             self.history['val_loss'].append(val_metrics['loss'])
-            self.history['train_recon_loss'].append(train_metrics['recon_loss'])
-            self.history['val_recon_loss'].append(val_metrics['recon_loss'])
             self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
             
-            print(f"Train Loss: {train_metrics['loss']:.6f}")
-            print(f"Val Loss: {val_metrics['loss']:.6f}")
-            print(f"Learning Rate: {self.optimizer.param_groups[0]['lr']:.6f}")
+            print(f"Train Loss: {train_metrics['loss']:.6f} | Val Loss: {val_metrics['loss']:.6f}")
+            
+            current_val_loss = val_metrics['loss']
+            self.scheduler.step(current_val_loss)
 
-            if val_metrics['loss'] < best_val_loss:
-                best_val_loss = val_metrics['loss']
+            if current_val_loss < best_val_loss:
+                best_val_loss = current_val_loss
                 patience_counter = 0
-                
                 self.save_checkpoint(self.best_model_path, epoch, best_val_loss)
-                print(f"Model zapisany (val_loss: {best_val_loss:.6f})")
+                print("-> Model zapisany (Best Val Loss)")
             else:
                 patience_counter += 1
-                
-                if early_stopping_patience and patience_counter >= early_stopping_patience:
-                    print(f'\nEarly stopping po {epoch+1} epokach')
+                if patience_counter >= early_stopping_patience:
+                    print(f"Early stopping po {epoch+1} epokach.")
                     break
-            
-            self.scheduler.step(epoch)
-        
-        print(f"\nNajlepszy model zapisany w: {self.best_model_path}")
         
         return self.history
-
-    def extract_latent(self, dataloader: DataLoader, return_images: bool = False) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-        self.eval()
-        latent_vectors = []
-        images = [] if return_images else None
-
-        with torch.no_grad():
-            for batch in tqdm(dataloader, desc="Extracting Latent Vectors"):
-                if isinstance(batch, dict):
-                    img = batch['image'].to(self.device)
-                else:
-                    img = batch[0].to(self.device)  if isinstance(batch, (list, tuple)) else batch.to(self.device)
-                
-                latent, _ = self.encoder(img)
-                latent_vectors.append(latent.cpu().numpy())
-                
-                if return_images:
-                    images.append(img.cpu().numpy())
-
-        latent_array = np.concatenate(latent_vectors, axis=0)
-        images_array = np.concatenate(images, axis=0) if return_images else None
-
-        return latent_array, images_array
-
-    # in future: encode and decode functions:
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.to(self.device)
-        with torch.no_grad():
-            latent, _ = self.encoder(x)
-        return latent
-
-    def decode(self, latent) -> torch.Tensor:
-        self.eval()
-        
-        if isinstance(latent, np.ndarray):
-            latent = torch.from_numpy(latent).float()
-        
-        latent = latent.to(self.device)
-        
-        with torch.no_grad():
-            reconstruction = self.decoder(latent)
-        
-        return reconstruction
     
-    def decode_batch(self, latent_vectors, batch_size=128):
-        self.decoder.eval()
-        
-        if isinstance(latent_vectors, np.ndarray):
-            latent_vectors = torch.from_numpy(latent_vectors).float()
-        
-        device = next(self.decoder.parameters()).device
-        
-        decoded_images = []
-        num_samples = latent_vectors.shape[0]
-        
+    def extract_latent(self, dataloader):
+        self.eval()
+        latents = []
         with torch.no_grad():
-            for i in tqdm(range(0, num_samples, batch_size)):
-                batch = latent_vectors[i:i+batch_size].to(device)
-                
-                decoded_batch = self.decoder(batch)
-                decoded_images.append(decoded_batch.cpu())
-                
-                if i % (batch_size * 10) == 0 and torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-        
-        decoded_images = torch.cat(decoded_images, dim=0)
-        return decoded_images.numpy()
+            for batch in dataloader:
+                img = batch[0].to(self.device) if isinstance(batch, (list, tuple)) else batch.to(self.device)
+                l, _ = self.encoder(img)
+                latents.append(l.cpu().numpy())
+        return np.concatenate(latents, axis=0), None
 
-    # Functions to save best model
-    def save_checkpoint(self, path: Path, epoch: int, val_loss: float):
+    def decode_batch(self, latents, batch_size=128):
+        self.decoder.eval()
+        device = next(self.parameters()).device
+        if isinstance(latents, np.ndarray): latents = torch.from_numpy(latents).float()
+        outs = []
+        with torch.no_grad():
+            for i in range(0, len(latents), batch_size):
+                batch = latents[i:i+batch_size].to(device)
+                outs.append(self.decoder(batch).cpu())
+        return torch.cat(outs).numpy()
+
+    def save_checkpoint(self, path, epoch, val_loss):
         path.parent.mkdir(parents=True, exist_ok=True)
-        
-        if path.exists():
-            timestamp = datetime.now().strftime("%H-%M-%S-%d-%m")
-            old_path = path.parent / f"old-{timestamp}{path.suffix}"
-            try:
-                path.rename(old_path)
-                print(f"Stary model przemianowany na: {old_path.name}")
-            except OSError as e:
-                print(f"Nie udało się zmienić nazwy starego pliku: {e}")
-        
+
         torch.save({
-            'epoch': epoch,
             'model_state_dict': self.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
-            'scaler_state_dict': self.scaler.state_dict(),
-            'val_loss': val_loss,
-            'history': self.history,
-            'latent_dim': self.latent_dim
+            'epoch': epoch, 'val_loss': val_loss
         }, path)
 
-    def load_checkpoint(self, path: Optional[Path] = None):
-        if path is None:
-            path = self.best_model_path
-        
-        checkpoint = torch.load(path, map_location=self.device)
-        
-        if 'model_state_dict' in checkpoint:
-            self.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            print("Wykryto stary format checkpointu. Ładowanie częściowe...")
-            if 'encoder_state_dict' in checkpoint:
-                self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
-            if 'decoder_state_dict' in checkpoint:
-                self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
-            print("UWAGA: Projection Head został zainicjalizowany losowo (nie był obecny w starym modelu).")
-
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        
-        if 'scheduler_state_dict' in checkpoint:
-            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        if 'scaler_state_dict' in checkpoint:
-            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        
-        self.history = checkpoint.get('history', self.history)
-        
-        print(f"Model wczytany z: {path}")
-        print(f"Epoka: {checkpoint.get('epoch', 0)}, Val Loss: {checkpoint.get('val_loss', 0.0):.6f}")
-        
-        return checkpoint.get('epoch', 0), checkpoint.get('val_loss', 0.0)
-
+    def load_checkpoint(self, path=None):
+        if path is None: path = self.best_model_path
+        ckpt = torch.load(path, map_location=self.device)
+        self.load_state_dict(ckpt['model_state_dict'])
+        self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])

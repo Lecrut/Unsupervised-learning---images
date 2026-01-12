@@ -1,39 +1,53 @@
+import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 class Decoder(nn.Module):
-    def __init__(self, latent_dim=1024, output_channels=3, image_size=256):
+    def __init__(self, latent_dim=2048, output_channels=3, image_size=256):
         super().__init__()
+        
+        self.reshape_h = 4
+        self.reshape_w = 4
+        self.reshape_c = 128
+        self.reshape_flat = self.reshape_c * self.reshape_h * self.reshape_w 
+        
+        self.fc = nn.Linear(latent_dim, self.reshape_flat)
+        self.act = nn.LeakyReLU(0.2, inplace=True)
 
-        self.fc = nn.Linear(latent_dim, 512 * 8 * 8)
-        self.unflatten = nn.Unflatten(1, (512, 8, 8))
-        self.image_size = image_size
-
-        def up_block(in_ch, out_ch):
+        def up_block(in_c, out_c):
             return nn.Sequential(
-                nn.Upsample(scale_factor=2, mode='nearest'),
-                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-                nn.GELU()
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_c),
+                nn.LeakyReLU(0.2, inplace=True)
             )
 
-        self.up1 = up_block(512, 512)   # 8 → 16
-        self.up2 = up_block(512, 256)   # 16 → 32
-        self.up3 = up_block(256, 128)   # 32 → 64
-        self.up4 = up_block(128, 64)    # 64 → 128
-
-        self.final = nn.Sequential(
-            nn.Conv2d(64, output_channels * 4, kernel_size=3, padding=1),
-            nn.PixelShuffle(2),
-            nn.Sigmoid()
+        self.net = nn.Sequential(
+            # Start: 4x4 -> 8x8
+            up_block(self.reshape_c, 256),
+            
+            # 8 -> 16
+            up_block(256, 256),
+            
+            # 16 -> 32
+            up_block(256, 128),
+            
+            # 32 -> 64
+            up_block(128, 64),
+            
+            # 64 -> 128
+            up_block(64, 32),
+            
+            # 128 -> 256
+            nn.Upsample(scale_factor=2, mode='bilinear'),
+            nn.Conv2d(32, output_channels, kernel_size=3, padding=1),
+            nn.Sigmoid() 
         )
 
     def forward(self, z):
-        x = self.unflatten(self.fc(z))
-
-        x = self.up1(x)
-        x = self.up2(x)
-        x = self.up3(x)
-        x = self.up4(x)
-
-        x = self.final(x)
+        x = self.fc(z)
+        x = self.act(x)
+        
+        x = x.view(-1, self.reshape_c, self.reshape_h, self.reshape_w)
+        
+        x = self.net(x)
         return x
