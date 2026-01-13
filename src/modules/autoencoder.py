@@ -10,13 +10,13 @@ from datetime import datetime
 from .encoder import Encoder
 from .decoder import Decoder
 import torch.nn.functional as F
-import kornia.losses as K
+import kornia as K
 
 class Autoencoder(nn.Module):
     def __init__(self, 
                  latent_dim=2048, 
                  input_channels=4, 
-                 learning_rate=1e-3,  
+                 learning_rate=0.001,  
                  image_size=256, 
                  use_amp=True, 
                  load_best=False
@@ -24,6 +24,7 @@ class Autoencoder(nn.Module):
         super().__init__()
         self.latent_dim = latent_dim
         self.input_channels = input_channels
+        self.learning_rate = learning_rate 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.use_amp = use_amp and torch.cuda.is_available()
         self.best_model_path = Path('checkpoints/best_autoencoder.pt')
@@ -32,19 +33,16 @@ class Autoencoder(nn.Module):
         self.encoder = Encoder(latent_dim, input_channels, image_size)
         self.decoder = Decoder(latent_dim, output_channels=3, image_size=image_size)
 
+        self.lap = K.filters.Laplacian(kernel_size=5, normalized=True)
+        self.l1_loss = nn.L1Loss()
+
         self.to(self.device)
 
         self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=1e-4)
     
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=3, min_lr=1e-6
-        )
+        self.scheduler = None
         
         self.scaler = torch.amp.GradScaler('cuda', enabled=self.use_amp)
-
-        self.ssim_loss = K.SSIMLoss(window_size=11, reduction='mean')
-        
-        self.l1_loss = nn.L1Loss()
 
         self.history = {
             'train_loss': [], 'val_loss': [], 
@@ -64,20 +62,30 @@ class Autoencoder(nn.Module):
 
     def compute_loss(self, target, reconstruction, latent):
         target_rgb = target[:, :3, :, :]
-        
-        if self.ssim_loss:
-            loss_ssim = self.ssim_loss(reconstruction, target_rgb)
-            loss_l1 = self.l1_loss(reconstruction, target_rgb)
-            loss_recon = 0.7 * loss_ssim + 0.3 * loss_l1
-        else:
-            loss_recon = self.l1_loss(reconstruction, target_rgb)
 
-        loss_var = 0.0
+        loss_l1 = F.l1_loss(reconstruction, target_rgb)
+
+        with torch.cuda.amp.autocast(enabled=False):
+            lap_recon = self.lap(reconstruction.float())
+            lap_target = self.lap(target_rgb.float()).detach()
+            loss_hf = F.l1_loss(lap_recon, lap_target)
+
+        loss_latent = 0.0
         if latent is not None:
-             std = torch.sqrt(latent.var(dim=0) + 1e-4)
-             loss_var = torch.mean(F.relu(1.0 - std)) 
+            z = latent - latent.mean(dim=0, keepdim=True)
+            z = F.normalize(z, dim=1)
+            sim = z @ z.T
+            sim = sim - torch.eye(z.size(0), device=z.device)
+            loss_latent = sim.pow(2).mean()
 
-        return loss_recon + 0.01 * loss_var, loss_recon
+        loss = (
+            1.0 * loss_l1 +
+            0.4 * loss_hf +
+            0.05 * loss_latent
+        )
+
+        return loss, loss_l1
+
 
     def train_epoch(self, dataloader):
         self.train()
@@ -91,7 +99,8 @@ class Autoencoder(nn.Module):
 
             with torch.amp.autocast('cuda', enabled=self.use_amp):
                 recon, latent = self.forward(img)
-                loss, recon_loss_val = self.compute_loss(img, recon, latent)
+            
+            loss, recon_loss_val = self.compute_loss(img, recon, latent)
 
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer) 
@@ -99,10 +108,13 @@ class Autoencoder(nn.Module):
 
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"NaN/Inf detected! Skipping batch")
-                continue
+                # continue
 
             self.scaler.step(self.optimizer)
             self.scaler.update()
+            
+            if self.scheduler is not None:
+                self.scheduler.step()
 
             epoch_loss += loss.item()
             epoch_recon += recon_loss_val.item()
@@ -137,7 +149,18 @@ class Autoencoder(nn.Module):
         best_val_loss = float('inf')
         patience_counter = 0
 
-        print(f"Start treningu na: {self.device} z SSIM+L1 Loss")
+        print(f"Start treningu na: {self.device} z OneCycleLR (Max LR: {self.learning_rate})")
+
+        self.scheduler = optim.lr_scheduler.OneCycleLR(
+            self.optimizer,
+            max_lr=self.learning_rate,     
+            steps_per_epoch=len(train_loader),
+            epochs=epochs,
+            pct_start=0.1,                  
+            div_factor=10.0,                
+            final_div_factor=10000.0,       
+            anneal_strategy='cos'
+        )
 
         for epoch in range(epochs):
             print(f"\nEpoka {epoch + 1}/{epochs}")
@@ -147,13 +170,14 @@ class Autoencoder(nn.Module):
 
             self.history['train_loss'].append(train_metrics['loss'])
             self.history['val_loss'].append(val_metrics['loss'])
-            self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
             
-            print(f"Train Loss: {train_metrics['loss']:.6f} | Val Loss: {val_metrics['loss']:.6f}")
+            current_lr = self.optimizer.param_groups[0]['lr']
+            self.history['learning_rates'].append(current_lr)
+            
+            print(f"Train Loss: {train_metrics['loss']:.6f} | Val Loss: {val_metrics['loss']:.6f} | LR: {current_lr:.6f}")
             
             current_val_loss = val_metrics['loss']
-            self.scheduler.step(current_val_loss)
-
+            
             if current_val_loss < best_val_loss:
                 best_val_loss = current_val_loss
                 patience_counter = 0
