@@ -1,42 +1,43 @@
 import torch
 import torch.nn as nn
 
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
+
+    def forward(self, x):
+        return self.double_conv(x)
+
 class Encoder(nn.Module):
-    def __init__(self, latent_dim=2048, input_channels=4, image_size=256):
+    def __init__(self, input_channels=4, filter_sizes=[32, 64, 128, 256, 512, 1024]):
         super().__init__()
         
-        # 1. Feature Extractor (Schodzimy do 16x16)
-        self.features = nn.Sequential(
-            # 256 -> 128
-            nn.Conv2d(input_channels, 32, 4, 2, 1), nn.BatchNorm2d(32), nn.LeakyReLU(0.2, True),
-            # 128 -> 64
-            nn.Conv2d(32, 64, 4, 2, 1), nn.BatchNorm2d(64), nn.LeakyReLU(0.2, True),
-            # 64 -> 32
-            nn.Conv2d(64, 128, 4, 2, 1), nn.BatchNorm2d(128), nn.LeakyReLU(0.2, True),
-            # 32 -> 16
-            nn.Conv2d(128, 256, 4, 2, 1), nn.BatchNorm2d(256), nn.LeakyReLU(0.2, True),
-        )
+        self.downs = nn.ModuleList()
+        self.pool = nn.MaxPool2d(2)
         
-    
-        self.reduce_conv = nn.Sequential(
-            nn.Conv2d(256, 32, kernel_size=1), 
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.2, True)
-        )
-        
-        # Wielkość po spłaszczeniu: 32 kanały * 16 * 16 = 8192 features
-        self.flat_size = 32 * 16 * 16
-        
-        self.fc_head = nn.Sequential(
-            nn.Linear(self.flat_size, latent_dim * 2), 
-            nn.BatchNorm1d(latent_dim * 2),
-            nn.LeakyReLU(0.2, True),
-            nn.Linear(latent_dim * 2, latent_dim)      
-        )
+        in_c = input_channels
+        for out_c in filter_sizes:
+            self.downs.append(DoubleConv(in_c, out_c))
+            in_c = out_c
+            
+        self.bottleneck = DoubleConv(filter_sizes[-1], filter_sizes[-1] * 2)
         
     def forward(self, x):
-        x = self.features(x)       # [B, 256, 16, 16]
-        x = self.reduce_conv(x)    # [B, 32, 16, 16] 
-        x = torch.flatten(x, 1)    # [B, 8192]
-        latent = self.fc_head(x)   # [B, 2048]
-        return latent, None
+        skips = []
+        
+        for down in self.downs:
+            x = down(x)
+            skips.append(x)
+            x = self.pool(x)
+            
+        x = self.bottleneck(x)
+        
+        return x, skips[::-1]
