@@ -1,42 +1,51 @@
+#%% Imports
 import torch
 import torch.nn as nn
 
+#%% Encoder Definition - Simplified and Faster
 class Encoder(nn.Module):
-    def __init__(self, latent_dim=2048, input_channels=4, image_size=256):
+    def __init__(self, latent_dim=768, input_channels=4, image_size=256):
         super().__init__()
+        self.latent_dim = latent_dim
+        self.image_size = image_size
         
-        # 1. Feature Extractor (Schodzimy do 16x16)
-        self.features = nn.Sequential(
-            # 256 -> 128
-            nn.Conv2d(input_channels, 32, 4, 2, 1), nn.BatchNorm2d(32), nn.LeakyReLU(0.2, True),
-            # 128 -> 64
-            nn.Conv2d(32, 64, 4, 2, 1), nn.BatchNorm2d(64), nn.LeakyReLU(0.2, True),
-            # 64 -> 32
-            nn.Conv2d(64, 128, 4, 2, 1), nn.BatchNorm2d(128), nn.LeakyReLU(0.2, True),
-            # 32 -> 16
-            nn.Conv2d(128, 256, 4, 2, 1), nn.BatchNorm2d(256), nn.LeakyReLU(0.2, True),
-        )
+        self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.act1 = nn.GELU()
         
+        # 128 -> 64
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(128)
+        self.act2 = nn.GELU()
+        
+        # 64 -> 32
+        self.conv3 = nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(256)
+        self.act3 = nn.GELU()
+        
+        # 32 -> 16
+        self.conv4 = nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn4 = nn.BatchNorm2d(512)
+        self.act4 = nn.GELU()
+        
+        # 16 -> 8
+        self.conv5 = nn.Conv2d(512, 512, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn5 = nn.BatchNorm2d(512)
+        self.act5 = nn.GELU()
+        
+        # latent: 512 x 8 x 8 = 32768
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(512 * 8 * 8, latent_dim)
+        self.norm = nn.LayerNorm(latent_dim)
     
-        self.reduce_conv = nn.Sequential(
-            nn.Conv2d(256, 32, kernel_size=1), 
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(0.2, True)
-        )
+    def forward(self, x):        
+        x1 = self.act1(self.bn1(self.conv1(x)))
+        x2 = self.act2(self.bn2(self.conv2(x1)))
+        x3 = self.act3(self.bn3(self.conv3(x2)))
+        x4 = self.act4(self.bn4(self.conv4(x3)))
+        x5 = self.act5(self.bn5(self.conv5(x4)))
         
-        # Wielkość po spłaszczeniu: 32 kanały * 16 * 16 = 8192 features
-        self.flat_size = 32 * 16 * 16
+        flat = self.flatten(x5)
+        latent = self.norm(self.fc(flat))
         
-        self.fc_head = nn.Sequential(
-            nn.Linear(self.flat_size, latent_dim * 2), 
-            nn.BatchNorm1d(latent_dim * 2),
-            nn.LeakyReLU(0.2, True),
-            nn.Linear(latent_dim * 2, latent_dim)      
-        )
-        
-    def forward(self, x):
-        x = self.features(x)       # [B, 256, 16, 16]
-        x = self.reduce_conv(x)    # [B, 32, 16, 16] 
-        x = torch.flatten(x, 1)    # [B, 8192]
-        latent = self.fc_head(x)   # [B, 2048]
-        return latent, None
+        return latent, [x1, x2, x3, x4]
