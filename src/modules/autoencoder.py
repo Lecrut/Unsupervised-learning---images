@@ -18,7 +18,7 @@ class Autoencoder(nn.Module):
                  image_size=256, 
                  use_amp=True, 
                  load_best=False,
-                 skip_dropout=0.5
+                 skip_dropout=0.2
                 ):
         super().__init__()
 
@@ -61,10 +61,15 @@ class Autoencoder(nn.Module):
             return skips
 
         p = min(self.skip_dropout, self.skip_dropout * self.current_epoch)
+        
+        if p <= 0.001:
+            return skips
+
+        drop_all = torch.rand(1).item() < (p * 0.3) 
 
         out = []
         for s in skips:
-            if torch.rand(1, device=s.device) < p:
+            if drop_all or (torch.rand(1).item() < p):
                 out.append(torch.zeros_like(s))
             else:
                 out.append(s)
@@ -167,6 +172,13 @@ class Autoencoder(nn.Module):
             current_lr = self.optimizer.param_groups[0]['lr']
             self.history['learning_rates'].append(current_lr)
 
+            print(
+                f"Epoch {epoch + 1}/{epochs} | "
+                f"train_loss: {train_metrics['loss']:.4f} | "
+                f"val_loss: {val_metrics['loss']:.4f} | "
+                f"lr: {current_lr:.6f}"
+            )
+
             if val_metrics['loss'] < best_val_loss:
                 best_val_loss = val_metrics['loss']
                 patience_counter = 0
@@ -215,12 +227,16 @@ class Autoencoder(nn.Module):
 
     def save_checkpoint(self, path, epoch, val_loss):
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
-            'model_state_dict': self.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'epoch': epoch,
-            'val_loss': val_loss
-        }, path)
+        torch.save(
+            {
+                'model_state_dict': self.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'epoch': epoch,
+                'val_loss': val_loss,
+            },
+            path,
+        )
+        print(f"Saved new model checkpoint to {path} (epoch {epoch + 1}, val_loss={val_loss:.4f})")
 
     def load_checkpoint(self, path=None):
         if path is None:
