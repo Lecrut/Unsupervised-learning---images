@@ -44,14 +44,14 @@ class ImageFolderDataset(Dataset):
             return self.to_tensor(img)
 
 #%% Create DataLoader from images in a folder
-def create_image_dataloader(folder, batch_size=128, num_workers=NUM_WORKERS, augmentation=False):
+def create_image_dataloader(folder, batch_size=128, num_workers=NUM_WORKERS, augmentation=False, shuffle=True):
     print(f"Tworzenie DataLoadera z obrazów w {folder}")
     dataset = ImageFolderDataset(folder, augmentation=augmentation)
     print(f"Liczba obrazów w zbiorze: {len(dataset)}")
 
     loader = DataLoader(dataset,
                         batch_size=batch_size,
-                        shuffle=True,
+                        shuffle=shuffle,
                         num_workers=num_workers,
                         pin_memory=True)
 
@@ -72,12 +72,11 @@ def process_batch_for_save(args):
     return saved_paths
 
 #%% Load or create damaged DataLoader
-def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=False, batch_size=128):
+def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=False, batch_size=128, shuffle_data=True):
 
     if os.path.exists(damaged_dir) and any(f.endswith('.png') for f in os.listdir(damaged_dir)):
         print(f"Ładowanie uszkodzonych obrazów z {damaged_dir}")
-        return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation)
-
+        return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation, shuffle=shuffle_data)
     print("Generowanie uszkodzonych obrazów...")
     os.makedirs(damaged_dir, exist_ok=True)
 
@@ -108,4 +107,4 @@ def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=Fal
 
     print(f"Zapisano uszkodzone obrazy do {damaged_dir}")
 
-    return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation)
+    return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation, shuffle=shuffle_data)
