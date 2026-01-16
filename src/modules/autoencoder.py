@@ -193,11 +193,14 @@ class Autoencoder(nn.Module):
     def extract_latent(self, dataloader):
         self.eval()
         latents = []
-        with torch.no_grad():
-            for batch in dataloader:
+        
+        with torch.no_grad(), torch.cuda.amp.autocast(enabled=self.use_amp):
+            for batch in tqdm(dataloader, desc="Extracting latents"):
                 img = batch[0].to(self.device) if isinstance(batch, (list, tuple)) else batch.to(self.device)
+                
                 l, _ = self.encoder(img)
                 latents.append(l.cpu().numpy())
+                
         return np.concatenate(latents, axis=0), None
 
     def decode_batch(self, latents, batch_size=128):
@@ -244,3 +247,4 @@ class Autoencoder(nn.Module):
         ckpt = torch.load(path, map_location=self.device)
         self.load_state_dict(ckpt['model_state_dict'])
         self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        print(f"Loaded autoencoder checkpoint from {path} (epoch {ckpt.get('epoch', 'unknown') + 1}, val_loss={ckpt.get('val_loss', 'unknown'):.4f})")
