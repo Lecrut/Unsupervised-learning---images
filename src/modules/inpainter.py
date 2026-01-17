@@ -7,110 +7,113 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 
-class VectorQuantizer(nn.Module):
-    def __init__(self, num_embeddings, embedding_dim, commitment_cost=0.25):
+# --- BLOKI POMOCNICZE ---
+class ResBlockConv(nn.Module):
+    """Blok zachowujący ostrość i relacje przestrzenne"""
+    def __init__(self, channels):
         super().__init__()
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
-        self.commitment_cost = commitment_cost
-        
-        self.embedding = nn.Embedding(self.num_embeddings, self.embedding_dim)
-        self.embedding.weight.data.uniform_(-1 / self.num_embeddings, 1 / self.num_embeddings)
-
-    def forward(self, inputs):        
-        distances = (torch.sum(inputs**2, dim=1, keepdim=True) 
-                    + torch.sum(self.embedding.weight**2, dim=1)
-                    - 2 * torch.matmul(inputs, self.embedding.weight.t()))
-            
-        encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
-        
-        quantized = self.embedding(encoding_indices).view_as(inputs)
-        
-        e_latent_loss = F.mse_loss(quantized.detach(), inputs)
-        q_latent_loss = F.mse_loss(quantized, inputs.detach())
-        loss = q_latent_loss + self.commitment_cost * e_latent_loss
-        
-        quantized = inputs + (quantized - inputs).detach()
-        
-        return quantized, loss, encoding_indices.squeeze()
-
-class ResBlock(nn.Module):
-    def __init__(self, dim, dropout=0.1):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, dim),
+        self.conv = nn.Sequential(
+            nn.Conv2d(channels, channels, 3, 1, 1),
+            nn.GroupNorm(8, channels), # GroupNorm jest lepszy dla małych batchy niż BatchNorm
             nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(dim, dim)
+            nn.Conv2d(channels, channels, 3, 1, 1),
+            nn.GroupNorm(8, channels),
         )
 
     def forward(self, x):
-        return x + self.net(x)
+        return x + self.conv(x)
 
+# --- GŁÓWNA KLASA INPAINTERA ---
 class ClusterInpainter(nn.Module):
     def __init__(self, 
-                 latent_dim=1024,     
-                 hidden_dim=1024,      
-                 num_clusters=10,      
-                 num_layers=6,         
-                 dropout=0.1,
-                 load_best=False
+                 latent_dim=1024,     # Twój wektor wejściowy (z maina)
+                 spatial_dim=8,       # Rozmiar przestrzenny w encoderze (8x8)
+                 latent_channels=512, # Ilość kanałów w encoderze (512)
+                 num_clusters=10,     # Ilość klas
+                 load_best=False,
+                 **kwargs             # Ignorujemy inne stare parametry
                  ):
         super().__init__()
-        self.device  = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.path = Path('checkpoints/inpainter_best.pt')
-        self.latent_dim = latent_dim
-        self.load_best = load_best
         self.best_loaded = False
         
-        self.cluster_embedding = nn.Embedding(num_clusters, hidden_dim)
+        # Zapamiętujemy wymiary do "rozpakowania" wektora
+        self.spatial_dim = spatial_dim
+        self.latent_channels = latent_channels
+        self.flat_features_size = latent_channels * spatial_dim * spatial_dim # 512*8*8 = 32768
         
-        self.input_proj = nn.Linear(latent_dim, hidden_dim)
+        # 1. ROZPAKOWYWANIE: Wektor(1024) -> Mapa Cech(32768)
+        self.fc_in = nn.Linear(latent_dim, self.flat_features_size)
         
+        # 2. EMBEDDING STYLU
+        self.style_embedding = nn.Embedding(num_clusters, 64) # Styl to wektor 64
+        
+        # 3. SIECI KONWOLUCYJNE (U-Net Like)
+        # Wejście: 512 (Latent) + 64 (Styl) = 576 kanałów
+        in_ch = latent_channels + 64
+        
+        self.conv_in = nn.Conv2d(in_ch, 512, 3, 1, 1)
+        
+        # Głębokie przetwarzanie (zamiast płaskich warstw)
         self.body = nn.Sequential(
-            *[ResBlock(hidden_dim, dropout) for _ in range(num_layers)],
-            nn.LayerNorm(hidden_dim)
+            ResBlockConv(512),
+            ResBlockConv(512),
+            ResBlockConv(512),
+            ResBlockConv(512)
         )
         
-        self.output_proj = nn.Linear(hidden_dim, latent_dim)
+        # Wyjście konwolucyjne (poprawka)
+        self.conv_out = nn.Conv2d(512, latent_channels, 3, 1, 1)
         
-        self.quantizer = VectorQuantizer(num_clusters, latent_dim, commitment_cost=0.25)
+        # 4. SPAKOWANIE: Mapa Cech -> Wektor(1024)
+        self.fc_out = nn.Linear(self.flat_features_size, latent_dim)
 
-        if self.load_best and self.path.exists():
-            self.load_state_dict(torch.load(self.path, map_location=self.device))
-            self.best_loaded = True
-            print(f"   Wczytano najlepszy model Inpaintera z {self.path}")
-
+        # Ładowanie wag
+        if load_best and self.path.exists():
+            try:
+                self.load_state_dict(torch.load(self.path, map_location=self.device))
+                self.best_loaded = True
+                print(f"   Wczytano inpaintera: {self.path}")
+            except:
+                print("   Nie udało się wczytać starego modelu (może inna architektura?). Trenuję od nowa.")
 
     def forward(self, z_damaged, cluster_id):
-        c_emb = self.cluster_embedding(cluster_id)
+        batch_size = z_damaged.shape[0]
         
-        h = self.input_proj(z_damaged) + c_emb
+        # KROK A: Projekcja w górę (Unflatten)
+        # Zamieniamy wektor 1D na obrazek 3D, żeby CNN mogło działać
+        x = self.fc_in(z_damaged) 
+        x = x.view(batch_size, self.latent_channels, self.spatial_dim, self.spatial_dim) # [B, 512, 8, 8]
         
+        # KROK B: Dodanie Stylu
+        style = self.style_embedding(cluster_id) # [B, 64]
+        # Rozciągamy wektor stylu na całą mapę 8x8
+        style_map = style.view(batch_size, 64, 1, 1).expand(-1, -1, self.spatial_dim, self.spatial_dim)
+        
+        # KROK C: Złączenie (Latent + Styl)
+        # Maska nie jest potrzebna, sieć sama nauczy się wykrywać anomalie
+        inp = torch.cat([x, style_map], dim=1) # [B, 576, 8, 8]
+        
+        # KROK D: Naprawa (Konwolucje)
+        h = self.conv_in(inp)
         h = self.body(h)
+        correction = self.conv_out(h)
         
-        z_predicted = self.output_proj(h) + z_damaged
+        # Residual connection (x + poprawka)
+        x_fixed = x + correction
         
-        z_quantized, vq_loss, _ = self.quantizer(z_predicted)
+        # KROK E: Projekcja w dół (Flatten)
+        # Wracamy do wektora 1024, żeby pasowało do Twojego Decodera
+        z_out = self.fc_out(x_fixed.view(batch_size, -1))
         
-        return z_quantized, vq_loss
+        return z_out, torch.tensor(0.0).to(self.device)
 
-    def fit(self, 
-            damaged_data, 
-            clean_data, 
-            cluster_ids, 
-            epochs=50, 
-            lr=1e-4, 
-            batch_size=128
-            ):
-        
-        if isinstance(damaged_data, np.ndarray):
-            damaged_data = torch.from_numpy(damaged_data).float()
-        if isinstance(clean_data, np.ndarray):
-            clean_data = torch.from_numpy(clean_data).float()
-        if isinstance(cluster_ids, (np.ndarray, list)):
-            cluster_ids = torch.tensor(cluster_ids).long()
+    def fit(self, damaged_data, clean_data, cluster_ids, epochs=50, lr=1e-4, batch_size=64):
+        # Konwersja na tensory (jeśli są numpy)
+        if isinstance(damaged_data, np.ndarray): damaged_data = torch.from_numpy(damaged_data).float()
+        if isinstance(clean_data, np.ndarray): clean_data = torch.from_numpy(clean_data).float()
+        if isinstance(cluster_ids, (np.ndarray, list)): cluster_ids = torch.tensor(cluster_ids).long()
 
         dataset = TensorDataset(damaged_data, clean_data, cluster_ids)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -118,52 +121,46 @@ class ClusterInpainter(nn.Module):
         self.to(self.device)
         self.train()
         
+        # Weight decay pomaga uniknąć overfittingu w latencie
         optimizer = optim.AdamW(self.parameters(), lr=lr, weight_decay=1e-4)
-        scheduler = optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=lr, steps_per_epoch=len(dataloader), epochs=epochs
-        )
+        scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=lr, steps_per_epoch=len(dataloader), epochs=epochs)
         
         best_loss = float('inf')
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         
-        print(f"    Start treningu Inpaintera (Device: {self.device})")
-        print(f"   Dane: {len(dataset)} próbek, Klastry: {self.cluster_embedding.num_embeddings}")
+        print(f"Start treningu Spatial Inpaintera (Bez Maski). Batche: {len(dataloader)}")
         
         for epoch in range(epochs):
             epoch_loss = 0.0
-            epoch_vq = 0.0
+            pbar = tqdm(dataloader, desc=f"Epoka {epoch+1}/{epochs}", leave=False)
             
-            pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", leave=False)
-            
-            for batch in pbar:
-                z_dam, z_clean, c_ids = [b.to(self.device) for b in batch]
+            for z_dam, z_clean, c_ids in pbar:
+                z_dam, z_clean, c_ids = z_dam.to(self.device), z_clean.to(self.device), c_ids.to(self.device)
                 
                 optimizer.zero_grad()
                 
-                z_repaired, vq_loss = self.forward(z_dam, c_ids)
+                # Forward pass
+                z_pred, _ = self.forward(z_dam, c_ids)
                 
-                recon_loss = F.mse_loss(z_repaired, z_clean)
-                
-                loss = recon_loss + vq_loss
+                # Loss MSE (wymuszamy podobieństwo latentów)
+                loss = F.mse_loss(z_pred, z_clean)
                 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0) 
                 optimizer.step()
                 scheduler.step()
                 
                 epoch_loss += loss.item()
-                epoch_vq += vq_loss.item()
-                
-                pbar.set_postfix({'MSE': f"{recon_loss.item():.5f}", 'VQ': f"{vq_loss.item():.5f}"})
+                pbar.set_postfix({'Loss': f"{loss.item():.5f}"})
             
             avg_loss = epoch_loss / len(dataloader)
+            print(f"Epoka {epoch+1}: Loss = {avg_loss:.6f}")
             
-            print(f"Epoch {epoch+1}: Avg Loss = {avg_loss:.6f} (VQ: {epoch_vq/len(dataloader):.6f})")
-
             if avg_loss < best_loss:
                 best_loss = avg_loss
-                print(f"   Nowy najlepszy model zapisany z loss = {best_loss:.6f}")
                 torch.save(self.state_dict(), self.path)
-                
+                print("   Zapisano model.")
+        
+        # Wczytujemy najlepszy model na koniec
         self.load_state_dict(torch.load(self.path))
         return self
