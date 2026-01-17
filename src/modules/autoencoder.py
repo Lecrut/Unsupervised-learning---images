@@ -156,6 +156,23 @@ class Autoencoder(nn.Module):
                 latents.append(l.cpu().numpy())
                 
         return np.concatenate(latents, axis=0), None
+    
+    def flatten_latent(self, dataloader):
+        self.eval()
+        latents = []
+        with torch.no_grad():
+            for batch in tqdm(dataloader, desc="Extracting latents"):
+                img = batch[0].to(self.device) if isinstance(batch, (list, tuple)) else batch.to(self.device)
+                
+                # Encoder zwraca [B, 64, 8, 8]
+                l = self.encoder(img)
+                
+                # --- FLATTEN: [B, 4096] ---
+                l = l.view(l.size(0), -1) 
+                
+                latents.append(l.cpu().numpy())
+                
+        return np.concatenate(latents, axis=0)
 
     def decode_batch(self, latents, batch_size=64):
         self.decoder.eval()
@@ -182,8 +199,12 @@ class Autoencoder(nn.Module):
         }, path)
 
     def load_checkpoint(self, path=None):
-        if path is None: path = self.best_model_path
+        if path is None:
+            path = self.best_model_path
         ckpt = torch.load(path, map_location=self.device)
-        self.load_state_dict(ckpt['model_state_dict'])
-        self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        print(f"Loaded checkpoint from {path}")
+        self.load_state_dict(ckpt["model_state_dict"])
+        self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        epoch = ckpt.get("epoch", "n/a")
+        val_loss = ckpt.get("val_loss", "n/a")
+        latent_ch = ckpt.get("latent_channels", self.latent_channels)
+        print(f"Loaded autoencoder from {path} | epoch: {epoch} | val_loss: {val_loss} | latent_channels: {latent_ch}")
