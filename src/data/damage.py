@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from skimage.draw import line
 from skimage.morphology import dilation, square
 
@@ -129,6 +129,72 @@ def make_damage_loader(dataloader, batch_size=None, shuffle=None):
         num_workers=dataloader.num_workers,
         collate_fn=damage_collate_fn
     )
+
+
+#%% Deterministic Damaged Dataset Wrapper
+class DeterministicDamagedDataset(Dataset):
+    def __init__(self, original_dataset, damage_fn_list=None, seed=42):
+        self.original_dataset = original_dataset
+        self.damage_fn_list = damage_fn_list or DAMAGE_FUNCTIONS
+        self.seed = seed
+        
+    def __len__(self):
+        return len(self.original_dataset)
+    
+    def __getitem__(self, idx):
+        rng = np.random.RandomState(self.seed + idx)
+        
+        item = self.original_dataset[idx]
+        image = item[0] if isinstance(item, (tuple, list)) else item
+        
+        damage_fn = rng.choice(self.damage_fn_list)
+        
+        torch.manual_seed(self.seed + idx)
+        np.random.seed(self.seed + idx)
+        
+        damaged_image = damage_fn(image.to(device))
+        
+        return damaged_image.cpu()
+
+
+#%% Create Paired Damaged Loaders
+def create_paired_damaged_loaders(train_loader, test_loader, val_loader, 
+                                   damage_fn_list=None, seed=42):
+    train_damaged_dataset = DeterministicDamagedDataset(
+        train_loader.dataset, damage_fn_list, seed
+    )
+    test_damaged_dataset = DeterministicDamagedDataset(
+        test_loader.dataset, damage_fn_list, seed
+    )
+    val_damaged_dataset = DeterministicDamagedDataset(
+        val_loader.dataset, damage_fn_list, seed
+    )
+    
+    train_damaged_loader = DataLoader(
+        train_damaged_dataset,
+        batch_size=train_loader.batch_size,
+        shuffle=False,
+        num_workers=train_loader.num_workers,
+        pin_memory=True
+    )
+    
+    test_damaged_loader = DataLoader(
+        test_damaged_dataset,
+        batch_size=test_loader.batch_size,
+        shuffle=False,
+        num_workers=test_loader.num_workers,
+        pin_memory=True
+    )
+    
+    val_damaged_loader = DataLoader(
+        val_damaged_dataset,
+        batch_size=val_loader.batch_size,
+        shuffle=False,
+        num_workers=val_loader.num_workers,
+        pin_memory=True
+    )
+    
+    return train_damaged_loader, test_damaged_loader, val_damaged_loader
 
 
 #%% Test damage functions

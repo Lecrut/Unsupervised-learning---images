@@ -10,10 +10,10 @@ from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 from itertools import islice
 from src.data.augmentations import reverse
-from src.data.damage import make_damage_loader
+from src.data.damage import make_damage_loader, create_paired_damaged_loaders
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from src.data.damage import make_damage_loader
+from src.data.damage import make_damage_loader, create_paired_damaged_loaders
 
 #%% Constants directories
 DATASET_DIR = 'data/dataset'
