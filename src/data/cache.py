@@ -10,6 +10,7 @@ from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 from itertools import islice
 from src.data.augmentations import reverse
+from src.data.damage import make_damage_loader
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from src.data.damage import make_damage_loader
@@ -108,3 +109,7 @@ def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=Fal
     print(f"Zapisano uszkodzone obrazy do {damaged_dir}")
 
     return create_image_dataloader(damaged_dir, batch_size, augmentation=augmentation, shuffle=shuffle_data)
+
+#%% Inpainter DataLoader
+def create_in_painter_dataloader(original_loader):
+    return make_damage_loader(original_loader, shuffle=False)

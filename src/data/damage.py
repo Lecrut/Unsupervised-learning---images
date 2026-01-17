@@ -121,12 +121,12 @@ def damage_collate_fn(batch):
     return torch.stack(damaged_images), torch.stack(original_images)
 
 #%% Make Damage DataLoader
-def make_damage_loader(dataloader, batch_size=None):
+def make_damage_loader(dataloader, batch_size=None, shuffle=None):
     return DataLoader(
         dataloader.dataset,
         batch_size=batch_size or dataloader.batch_size,
-        shuffle=isinstance(dataloader.sampler, type(None)),
-        num_workers=5,
+        shuffle=shuffle if shuffle is not None else dataloader.shuffle,
+        num_workers=dataloader.num_workers,
         collate_fn=damage_collate_fn
     )
 
