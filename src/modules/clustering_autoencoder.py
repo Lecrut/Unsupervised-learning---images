@@ -121,7 +121,6 @@ class ClusteringAutoencoder(nn.Module):
         print(f"    Koniec. Najlepszy model w: {self.save_path}")
 
     def get_latents(self, dataloader):
-        """Metoda dla Ciebie - zwraca gotowe wektory do pliku pca_clust.py"""
         self.load_model()
         self.eval()
         latents = []
