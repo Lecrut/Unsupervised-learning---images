@@ -60,7 +60,7 @@ class ClusteringAutoencoder(nn.Module):
         return np.concatenate(features, axis=0)
 
     def fit(self, dataloader, epochs=15):
-        print(f"    Start formowania przestrzeni ({epochs} epok). Cel: {self.num_clusters} odseparowanych wysp.")
+        print(f"Start formowania przestrzeni ({epochs} epok). Cel: {self.num_clusters} odseparowanych wysp.")
         self.save_path.parent.mkdir(parents=True, exist_ok=True)
         
         min_loss = float('inf')
@@ -80,7 +80,7 @@ class ClusteringAutoencoder(nn.Module):
             batch_size = dataloader.batch_size
             num_batches = len(dataloader)
             
-            loop = tqdm(dataloader, desc=f"Epoch {epoch}")
+            loop = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}")
             
             for i, batch in enumerate(loop):
                 img = batch[0] if isinstance(batch, (list, tuple)) else batch
@@ -91,7 +91,7 @@ class ClusteringAutoencoder(nn.Module):
                 targets = pseudo_labels[start_idx:end_idx]
                 
                 if len(targets) != img.size(0):
-                     targets = targets[:img.size(0)]
+                    targets = targets[:img.size(0)]
 
                 self.optimizer.zero_grad()
                 
@@ -113,26 +113,28 @@ class ClusteringAutoencoder(nn.Module):
                 loop.set_postfix(loss=loss.item(), acc=correct/total_samples)
 
             avg_loss = total_loss / num_batches
+            avg_acc = correct / total_samples
+            
+            print(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}, Acc: {avg_acc:.4f}")
             
             if avg_loss < min_loss:
                 min_loss = avg_loss
                 self.save_model()
+                print(f"Model saved (loss improved: {min_loss:.4f})")
 
-        print(f"    Koniec. Najlepszy model w: {self.save_path}")
+        print(f"Koniec. Najlepszy model w: {self.save_path}")
 
     def get_latents(self, dataloader):
         self.load_model()
         self.eval()
         latents = []
-        print("     Generowanie finalnych latentów...")
+        print("Generowanie finalnych latentow...")
         with torch.no_grad():
-            for batch in tqdm(dataloader):
+            for batch in tqdm(dataloader, desc="Extracting latents"):
                 img = batch[0] if isinstance(batch, (list, tuple)) else batch
                 img = img.to(self.device)
                 
                 z = self.encoder(img)
-                z = torch.mean(z, dim=[2, 3])
-                z = F.normalize(z, dim=1) 
                 latents.append(z.cpu().numpy())
                 
         return np.concatenate(latents, axis=0)
