@@ -184,7 +184,7 @@ def concatenate_fn(batch):
     return torch.stack(batch_cpu, dim=0)
 
 #%% Function to shuffle data (correct images and damaged)
-def shuffle_data(correct_dataloader, damaged_dataloader, correct_percent=0.5, damaged_percent=0.5):
+def shuffle_data(correct_dataloader, damaged_dataloader, correct_percent=0.5, damaged_percent=0.5, shuffle=True):
     correct_size = len(correct_dataloader.dataset)
     damaged_size = len(damaged_dataloader.dataset)
     
@@ -202,7 +202,7 @@ def shuffle_data(correct_dataloader, damaged_dataloader, correct_percent=0.5, da
     shuffled_loader = DataLoader(
         combined_dataset,
         batch_size=correct_dataloader.batch_size,
-        shuffle=True,
+        shuffle=shuffle,
         collate_fn=concatenate_fn,
         num_workers=max(1, correct_dataloader.num_workers),
         pin_memory=False,
