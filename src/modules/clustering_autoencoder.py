@@ -208,10 +208,9 @@ class ClusteringAutoencoder(nn.Module):
                 
                 with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
                     h = self.encoder(img)
-                    h = torch.mean(h, dim=[2, 3])
-                    h = F.normalize(h, dim=1) 
                 
-                latents.append(h.float().cpu().numpy()) 
+                latents.append(h.float().cpu().numpy())
+        
         return np.concatenate(latents, axis=0)
 
     def save_checkpoint(self, path, epoch, loss):
