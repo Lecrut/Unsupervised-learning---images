@@ -222,3 +222,65 @@ def create_paired_damaged_loaders(train_loader, test_loader, val_loader,
     )
     
     return train_damaged_loader, test_damaged_loader, val_damaged_loader
+
+#%% Paired Inpainting Dataset Wrapper
+class LabeledInpaintingDataset(Dataset):
+    def __init__(self, original_dataset, labels, damage_fn_list=DAMAGE_FUNCTIONS, seed=42):
+        """
+        original_dataset: Twój oryginalny dataset (np. ImageFolder lub TensorDataset)
+        labels: Tablica/Tensor z etykietami klastrów [N]
+        damage_fn_list: Lista funkcji uszkadzających
+        seed: Ziarno dla powtarzalności uszkodzeń
+        """
+        self.original_dataset = original_dataset
+        self.labels = labels
+        self.damage_fn_list = damage_fn_list
+        self.seed = seed
+
+        # Szybkie sprawdzenie spójności
+        if len(self.original_dataset) != len(self.labels):
+            raise ValueError(f"Rozmiar datasetu ({len(self.original_dataset)}) "
+                             f"nie zgadza się z liczbą etykiet ({len(self.labels)})!")
+
+    def __len__(self):
+        return len(self.original_dataset)
+
+    def __getitem__(self, idx):
+        # 1. Pobieramy czysty obraz
+        item = self.original_dataset[idx]
+        # Obsługa sytuacji, gdy dataset zwraca krotkę (img, stara_klasa) - bierzemy tylko img
+        if isinstance(item, (tuple, list)):
+            clean_img = item[0]
+        else:
+            clean_img = item
+
+        # 2. Pobieramy etykietę z Twojej zewnętrznej zmiennej
+        label = self.labels[idx]
+        
+        # Konwersja labela na tensor (jeśli to numpy int lub zwykły int)
+        if not isinstance(label, torch.Tensor):
+            label = torch.tensor(label, dtype=torch.long)
+
+        # 3. Generujemy uszkodzenie (deterministycznie, ale na CPU)
+        # Używamy lokalnego RNG dla danego indeksu, żeby zawsze było to samo uszkodzenie dla tego zdjęcia
+        rng = np.random.RandomState(self.seed + idx)
+        damage_fn = rng.choice(self.damage_fn_list)
+        
+        # Ustawiamy seed dla torcha (jeśli damage_fn używa torcha)
+        torch.manual_seed(self.seed + idx)
+        
+        # Aplikujemy uszkodzenie (ważne: na CPU, nie używaj .to(device) tutaj!)
+        damaged_img = damage_fn(clean_img)
+
+        return clean_img, damaged_img, label
+    
+def create_inpainter_dataloader(full_train_dataset):
+    train_loader_final = DataLoader(
+        full_train_dataset,
+        batch_size=32,          # Twój batch size
+        shuffle=True,           # WAŻNE: Teraz to jest bezpieczne
+        num_workers=4,          # Przyspieszenie ładowania
+        pin_memory=True,
+        drop_last=True          # Zalecane przy BatchNorm
+    )
+    return train_loader_final
