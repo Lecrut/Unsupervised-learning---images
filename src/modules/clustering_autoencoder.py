@@ -170,7 +170,7 @@ class ClusteringAutoencoder(nn.Module):
         if not self.save_path.exists():
             raise FileNotFoundError(f"No checkpoint found at {self.save_path}")
 
-        checkpoint = torch.load(self.save_path, map_location=self.device)
+        checkpoint = torch.load(self.save_path, map_location=self.device, weights_only=False)
 
         self.encoder.load_state_dict(checkpoint["encoder"])
         self.head.load_state_dict(checkpoint["head"])
