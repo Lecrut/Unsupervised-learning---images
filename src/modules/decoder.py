@@ -2,48 +2,38 @@ import torch
 import torch.nn as nn
 
 class Decoder(nn.Module):
-    def __init__(self, latent_dim=768, output_channels=4):
+    def __init__(self, latent_channels=64, output_channels=4, base_channels=32):
         super().__init__()
         
-        self.fc = nn.Linear(latent_dim, 512 * 8 * 8)
+        self.initial_conv = nn.Conv2d(latent_channels, base_channels*8, kernel_size=3, padding=1)
+        self.initial_norm = nn.BatchNorm2d(base_channels*8)
+        self.initial_act = nn.GELU()
         
-        self.up1 = nn.ConvTranspose2d(512, 512, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(512)
+        self.up1 = nn.ConvTranspose2d(base_channels*8, base_channels*8, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(base_channels*8)
         self.act1 = nn.GELU()
         
-        self.up2 = nn.ConvTranspose2d(1024, 256, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(256)
+        self.up2 = nn.ConvTranspose2d(base_channels*8, base_channels*4, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(base_channels*4)
         self.act2 = nn.GELU()
         
-        self.up3 = nn.ConvTranspose2d(512, 128, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn3 = nn.BatchNorm2d(128)
+        self.up3 = nn.ConvTranspose2d(base_channels*4, base_channels*2, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(base_channels*2)
         self.act3 = nn.GELU()
         
-        self.up4 = nn.ConvTranspose2d(256, 64, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn4 = nn.BatchNorm2d(64)
+        self.up4 = nn.ConvTranspose2d(base_channels*2, base_channels, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn4 = nn.BatchNorm2d(base_channels)
         self.act4 = nn.GELU()
         
-        self.up5 = nn.ConvTranspose2d(128, output_channels, kernel_size=4, stride=2, padding=1)
+        self.up5 = nn.ConvTranspose2d(base_channels, output_channels, kernel_size=4, stride=2, padding=1)
         
-    def forward(self, z, skips):
-        x = self.fc(z)
-        x = x.view(-1, 512, 8, 8) 
+    def forward(self, z):
+        x = self.initial_act(self.initial_norm(self.initial_conv(z)))
         
-        s1, s2, s3, s4 = skips
-        
-
         x = self.act1(self.bn1(self.up1(x)))
-        x = torch.cat([x, s4], dim=1) 
-
         x = self.act2(self.bn2(self.up2(x)))
-        x = torch.cat([x, s3], dim=1)
-
         x = self.act3(self.bn3(self.up3(x)))
-        x = torch.cat([x, s2], dim=1)
-
         x = self.act4(self.bn4(self.up4(x)))
-        x = torch.cat([x, s1], dim=1)
         
         x = self.up5(x)
-        
         return x

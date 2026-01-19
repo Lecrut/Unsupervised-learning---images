@@ -1,169 +1,254 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
+import torch.nn.functional as F
+from pathlib import Path
 import numpy as np
 from tqdm import tqdm
-from pathlib import Path
 
-class VectorQuantizer(nn.Module):
-    def __init__(self, num_embeddings, embedding_dim, commitment_cost=0.25):
+class LatentInpainter(nn.Module):
+    def __init__(self, 
+                 latent_channels=64,
+                 num_clusters=10,
+                 hidden_channels=128,
+                 learning_rate=0.001,
+                 use_amp=True,
+                 load_best=False,
+                 class_loss_weight=0.1
+                ):
         super().__init__()
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
-        self.commitment_cost = commitment_cost
-        
-        self.embedding = nn.Embedding(self.num_embeddings, self.embedding_dim)
-        self.embedding.weight.data.uniform_(-1 / self.num_embeddings, 1 / self.num_embeddings)
 
-    def forward(self, inputs):        
-        distances = (torch.sum(inputs**2, dim=1, keepdim=True) 
-                    + torch.sum(self.embedding.weight**2, dim=1)
-                    - 2 * torch.matmul(inputs, self.embedding.weight.t()))
-            
-        encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
+        self.latent_channels = latent_channels
+        self.num_clusters = num_clusters
+        self.learning_rate = learning_rate
+        self.class_loss_weight = class_loss_weight
+        self.current_epoch = 0
         
-        quantized = self.embedding(encoding_indices).view_as(inputs)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.use_amp = use_amp and torch.cuda.is_available()
+        self.best_model_path = Path('checkpoints/best_inpainter.pt')
         
-        e_latent_loss = F.mse_loss(quantized.detach(), inputs)
-        q_latent_loss = F.mse_loss(quantized, inputs.detach())
-        loss = q_latent_loss + self.commitment_cost * e_latent_loss
-        
-        quantized = inputs + (quantized - inputs).detach()
-        
-        return quantized, loss, encoding_indices.squeeze()
-
-class ResBlock(nn.Module):
-    def __init__(self, dim, dropout=0.1):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, dim),
+        self.encoder_block = nn.Sequential(
+            nn.Conv2d(latent_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(hidden_channels),
             nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(dim, dim)
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(hidden_channels),
+            nn.GELU()
         )
+        
+        self.middle_block = nn.Sequential(
+            nn.Conv2d(hidden_channels, hidden_channels*2, kernel_size=3, padding=2, dilation=2),
+            nn.BatchNorm2d(hidden_channels*2),
+            nn.GELU(),
+            nn.Conv2d(hidden_channels*2, hidden_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(hidden_channels),
+            nn.GELU()
+        )
+        
+        self.decoder_block = nn.Sequential(
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(hidden_channels),
+            nn.GELU(),
+            nn.Conv2d(hidden_channels, latent_channels, kernel_size=3, padding=1)
+        )
+
+        self.classifier = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(latent_channels, 128),
+            nn.GELU(),
+            nn.Linear(128, num_clusters)
+        )
+
+        self.mse_loss = nn.MSELoss()
+        self.ce_loss = nn.CrossEntropyLoss()
+        
+        self.to(self.device)
+
+        self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self.scheduler = None
+        self.scaler = torch.amp.GradScaler(self.device.__str__(), enabled=self.use_amp)
+
+        self.history = {'train_loss': [], 'val_loss': [], 'recon_loss': [], 'class_loss': []}
+
+        if load_best and self.best_model_path.exists():
+            self.load_checkpoint()
 
     def forward(self, x):
-        return x + self.net(x)
+        enc = self.encoder_block(x)
+        mid = self.middle_block(enc)
+        correction = self.decoder_block(mid)
+        return x + correction
 
-class ClusterInpainter(nn.Module):
-    def __init__(self, 
-                 latent_dim=1024,     
-                 hidden_dim=1024,      
-                 num_clusters=10,      
-                 num_layers=6,         
-                 dropout=0.1,
-                 load_best=False
-                 ):
-        super().__init__()
-        self.device  = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.path = Path('checkpoints/inpainter_best.pt')
-        self.latent_dim = latent_dim
-        self.load_best = load_best
-        self.best_loaded = False
-        
-        self.cluster_embedding = nn.Embedding(num_clusters, hidden_dim)
-        
-        self.input_proj = nn.Linear(latent_dim, hidden_dim)
-        
-        self.body = nn.Sequential(
-            *[ResBlock(hidden_dim, dropout) for _ in range(num_layers)],
-            nn.LayerNorm(hidden_dim)
-        )
-        
-        self.output_proj = nn.Linear(hidden_dim, latent_dim)
-        
-        self.quantizer = VectorQuantizer(num_clusters, latent_dim, commitment_cost=0.25)
+    def forward_train(self, x):
+        repaired = self.forward(x)
+        class_logits = self.classifier(repaired)
+        return repaired, class_logits
 
-        if self.load_best and self.path.exists():
-            self.load_state_dict(torch.load(self.path, map_location=self.device))
-            self.best_loaded = True
-            print(f"   Wczytano najlepszy model Inpaintera z {self.path}")
+    def compute_loss(self, repaired_latent, target_latent, pred_logits, target_labels):
+        loss_recon = self.mse_loss(repaired_latent, target_latent)
+        loss_class = self.ce_loss(pred_logits, target_labels)
+        total_loss = loss_recon + (self.class_loss_weight * loss_class)
+        return total_loss, loss_recon, loss_class
 
+    def _process_batch_data(self, batch_idx, clean_batch, corr_batch, all_labels, encoder_model):
+        clean_img = clean_batch[0].to(self.device, non_blocking=True) if isinstance(clean_batch, (list, tuple)) else clean_batch.to(self.device)
+        corr_img = corr_batch[0].to(self.device, non_blocking=True) if isinstance(corr_batch, (list, tuple)) else corr_batch.to(self.device)
+        
+        with torch.no_grad():
+            clean_latent = encoder_model(clean_img)
+            corr_latent = encoder_model(corr_img)
 
-    def forward(self, z_damaged, cluster_id):
-        c_emb = self.cluster_embedding(cluster_id)
+        batch_size = clean_latent.size(0)
+        start_idx = batch_idx * batch_size
+        end_idx = start_idx + batch_size
         
-        h = self.input_proj(z_damaged) + c_emb
+        current_labels = all_labels[start_idx:end_idx]
         
-        h = self.body(h)
+        if not isinstance(current_labels, torch.Tensor):
+            current_labels = torch.tensor(current_labels)
+            
+        current_labels = current_labels.to(self.device, dtype=torch.long)
         
-        z_predicted = self.output_proj(h) + z_damaged
+        return clean_latent, corr_latent, current_labels
+
+    def train_epoch(self, clean_loader, corr_loader, train_labels, encoder_model):
+        self.train()
+        encoder_model.eval() 
         
-        z_quantized, vq_loss, _ = self.quantizer(z_predicted)
+        epoch_loss = 0.0
+        epoch_recon = 0.0
+        epoch_class = 0.0
         
-        return z_quantized, vq_loss
+        loop = tqdm(zip(clean_loader, corr_loader), total=len(clean_loader), desc="Training")
+        
+        for batch_idx, (clean_batch, corr_batch) in enumerate(loop):
+            
+            clean_z, corr_z, labels = self._process_batch_data(
+                batch_idx, clean_batch, corr_batch, train_labels, encoder_model
+            )
+
+            self.optimizer.zero_grad(set_to_none=True)
+
+            with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
+                repaired_z, logits = self.forward_train(corr_z)
+                loss, l_recon, l_class = self.compute_loss(repaired_z, clean_z, logits, labels)
+
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
+            if self.scheduler is not None:
+                self.scheduler.step()
+
+            epoch_loss += loss.item()
+            epoch_recon += l_recon.item()
+            epoch_class += l_class.item()
+            
+            loop.set_postfix(loss=loss.item())
+
+        N = len(clean_loader)
+        return {
+            'loss': epoch_loss / N, 
+            'recon_loss': epoch_recon / N, 
+            'class_loss': epoch_class / N
+        }
+
+    @torch.no_grad()
+    def validate_epoch(self, clean_loader, corr_loader, val_labels, encoder_model):
+        self.eval()
+        encoder_model.eval()
+        
+        epoch_loss = 0.0
+        
+        loop = tqdm(zip(clean_loader, corr_loader), total=len(clean_loader), desc="Validation")
+        
+        for batch_idx, (clean_batch, corr_batch) in enumerate(loop):
+            clean_z, corr_z, labels = self._process_batch_data(
+                batch_idx, clean_batch, corr_batch, val_labels, encoder_model
+            )
+
+            with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
+                repaired_z, logits = self.forward_train(corr_z)
+                loss, _, _ = self.compute_loss(repaired_z, clean_z, logits, labels)
+
+            epoch_loss += loss.item()
+
+        return {'loss': epoch_loss / len(clean_loader)}
 
     def fit(self, 
-            damaged_data, 
-            clean_data, 
-            cluster_ids, 
-            epochs=50, 
-            lr=1e-4, 
-            batch_size=128
-            ):
+            clean_train_loader, corr_train_loader, train_labels, 
+            encoder_model, 
+            clean_val_loader=None, corr_val_loader=None, val_labels=None,
+            epochs=30, early_stopping_patience=10):
         
-        if isinstance(damaged_data, np.ndarray):
-            damaged_data = torch.from_numpy(damaged_data).float()
-        if isinstance(clean_data, np.ndarray):
-            clean_data = torch.from_numpy(clean_data).float()
-        if isinstance(cluster_ids, (np.ndarray, list)):
-            cluster_ids = torch.tensor(cluster_ids).long()
+        best_val_loss = float('inf')
+        patience_counter = 0
 
-        dataset = TensorDataset(damaged_data, clean_data, cluster_ids)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-        self.to(self.device)
-        self.train()
-        
-        optimizer = optim.AdamW(self.parameters(), lr=lr, weight_decay=1e-4)
-        scheduler = optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=lr, steps_per_epoch=len(dataloader), epochs=epochs
+        self.scheduler = optim.lr_scheduler.OneCycleLR(
+            self.optimizer,
+            max_lr=self.learning_rate,
+            steps_per_epoch=len(clean_train_loader),
+            epochs=epochs,
+            pct_start=0.1, 
+            div_factor=25.0,
+            final_div_factor=1000.0,
+            anneal_strategy='cos'
         )
-        
-        best_loss = float('inf')
-        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        
-        print(f"    Start treningu Inpaintera (Device: {self.device})")
-        print(f"   Dane: {len(dataset)} próbek, Klastry: {self.cluster_embedding.num_embeddings}")
-        
-        for epoch in range(epochs):
-            epoch_loss = 0.0
-            epoch_vq = 0.0
-            
-            pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", leave=False)
-            
-            for batch in pbar:
-                z_dam, z_clean, c_ids = [b.to(self.device) for b in batch]
-                
-                optimizer.zero_grad()
-                
-                z_repaired, vq_loss = self.forward(z_dam, c_ids)
-                
-                recon_loss = F.mse_loss(z_repaired, z_clean)
-                
-                loss = recon_loss + vq_loss
-                
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
-                
-                epoch_loss += loss.item()
-                epoch_vq += vq_loss.item()
-                
-                pbar.set_postfix({'MSE': f"{recon_loss.item():.5f}", 'VQ': f"{vq_loss.item():.5f}"})
-            
-            avg_loss = epoch_loss / len(dataloader)
-            
-            print(f"Epoch {epoch+1}: Avg Loss = {avg_loss:.6f} (VQ: {epoch_vq/len(dataloader):.6f})")
 
-            if avg_loss < best_loss:
-                best_loss = avg_loss
-                print(f"   Nowy najlepszy model zapisany z loss = {best_loss:.6f}")
-                torch.save(self.state_dict(), self.path)
-                
-        self.load_state_dict(torch.load(self.path))
-        return self
+        for epoch in range(epochs):
+            self.current_epoch = epoch
+            
+            train_metrics = self.train_epoch(
+                clean_train_loader, corr_train_loader, train_labels, encoder_model
+            )
+            
+            val_metrics = {'loss': 0.0}
+            if clean_val_loader and corr_val_loader and val_labels is not None:
+                val_metrics = self.validate_epoch(
+                    clean_val_loader, corr_val_loader, val_labels, encoder_model
+                )
+
+            self.history['train_loss'].append(train_metrics['loss'])
+            self.history['val_loss'].append(val_metrics['loss'])
+
+            print(f"Epoch {epoch+1}/{epochs} | "
+                  f"Train: {train_metrics['loss']:.4f} (Rec:{train_metrics['recon_loss']:.3f}, Cls:{train_metrics['class_loss']:.3f}) | "
+                  f"Val: {val_metrics['loss']:.4f}")
+
+            if val_metrics['loss'] < best_val_loss and val_metrics['loss'] != 0.0:
+                best_val_loss = val_metrics['loss']
+                patience_counter = 0
+                self.save_checkpoint(self.best_model_path, epoch, best_val_loss)
+            elif val_metrics['loss'] != 0.0:
+                patience_counter += 1
+                if patience_counter >= early_stopping_patience:
+                    print("Early stopping triggered")
+                    break
+                    
+        return self.history
+
+    def save_checkpoint(self, path, epoch, val_loss):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            'model_state_dict': self.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'epoch': epoch,
+            'val_loss': val_loss
+        }, path)
+        print(f"Saved checkpoint: {path}")
+
+    def load_checkpoint(self, path=None):
+        if path is None:
+            path = self.best_model_path
+        if not path.exists():
+            print(f"Checkpoint {path} not found.")
+            return
+        ckpt = torch.load(path, map_location=self.device)
+        self.load_state_dict(ckpt["model_state_dict"])
+        self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        print(f"Loaded inpainter from {path}")

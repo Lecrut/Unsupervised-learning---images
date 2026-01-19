@@ -1,68 +1,41 @@
-#%% Imports
 import torch
 import torch.nn as nn
 
-#%% Encoder Definition
 class Encoder(nn.Module):
-    def __init__(self, latent_dim=768, input_channels=4, image_size=256):
+    def __init__(self, latent_channels=64, input_channels=4, base_channels=32):
         super().__init__()
-        self.latent_dim = latent_dim
-        self.image_size = image_size
-        self.input_channels = input_channels
         
-        self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
+        self.conv1 = nn.Conv2d(input_channels, base_channels, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(base_channels) 
         self.act1 = nn.GELU()
         
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(128)
+        self.conv2 = nn.Conv2d(base_channels, base_channels*2, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(base_channels*2)
         self.act2 = nn.GELU()
         
-        self.conv3 = nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn3 = nn.BatchNorm2d(256)
+        self.conv3 = nn.Conv2d(base_channels*2, base_channels*4, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(base_channels*4)
         self.act3 = nn.GELU()
         
-        self.conv4 = nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn4 = nn.BatchNorm2d(512)
+        self.conv4 = nn.Conv2d(base_channels*4, base_channels*8, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn4 = nn.BatchNorm2d(base_channels*8)
         self.act4 = nn.GELU()
         
-        self.conv5 = nn.Conv2d(512, 512, kernel_size=4, stride=2, padding=1, bias=False)
-        self.bn5 = nn.BatchNorm2d(512)
+        self.conv5 = nn.Conv2d(base_channels*8, base_channels*8, kernel_size=4, stride=2, padding=1, bias=False)
+        self.bn5 = nn.BatchNorm2d(base_channels*8)
         self.act5 = nn.GELU()
         
-        self.flatten = nn.Flatten()
-        self.fc = nn.Linear(512 * 8 * 8, latent_dim)
-        self.norm = nn.LayerNorm(latent_dim)
-
-        # cache
-        self._example_skips = None
+        # Bottleneck
+        self.bottleneck = nn.Conv2d(base_channels*8, latent_channels, kernel_size=3, padding=1)
+        self.bottleneck_norm = nn.GroupNorm(4, latent_channels)
 
     def forward(self, x):        
-        x1 = self.act1(self.bn1(self.conv1(x)))
-        x2 = self.act2(self.bn2(self.conv2(x1)))
-        x3 = self.act3(self.bn3(self.conv3(x2)))
-        x4 = self.act4(self.bn4(self.conv4(x3)))
-        x5 = self.act5(self.bn5(self.conv5(x4)))
+        x = self.act1(self.bn1(self.conv1(x)))
+        x = self.act2(self.bn2(self.conv2(x)))
+        x = self.act3(self.bn3(self.conv3(x)))
+        x = self.act4(self.bn4(self.conv4(x)))
+        x = self.act5(self.bn5(self.conv5(x)))
         
-        flat = self.flatten(x5)
-        latent = self.norm(self.fc(flat))
-        
-        return latent, [x1, x2, x3, x4]
+        latent = self.bottleneck_norm(self.bottleneck(x))
+        return latent
 
-    @torch.no_grad()
-    def example_skips(self, device=None):
-        if self._example_skips is not None:
-            return self._example_skips
-
-        device = device or next(self.parameters()).device
-        dummy = torch.zeros(
-            1,
-            self.input_channels,
-            self.image_size,
-            self.image_size,
-            device=device
-        )
-
-        _, skips = self.forward(dummy)
-        self._example_skips = skips
-        return skips
