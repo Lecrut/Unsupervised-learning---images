@@ -246,7 +246,7 @@ class Autoencoder(nn.Module):
                 
         return self.history
     
-    def extract_latent(self, dataloader):
+    def extract_latent(self, dataloader, use_projector=False): 
         self.eval()
         latents = []
         print("Extracting latents...")
@@ -256,6 +256,16 @@ class Autoencoder(nn.Module):
                 img = img.to(self.device)
                 
                 z_spatial = self.encoder(img)
-                latents.append(z_spatial.cpu().numpy())
                 
+                if use_projector:
+                    z_mean = torch.mean(z_spatial, dim=[2, 3])
+                    z_std  = torch.std(z_spatial, dim=[2, 3])
+                    style_raw = torch.cat([z_mean, z_std], dim=1)
+
+                    style_emb = self.projector(style_raw)
+                    style_emb = F.normalize(style_emb, dim=1, p=2)
+                    latents.append(style_emb.cpu().numpy())
+                else:
+                    latents.append(z_spatial.cpu().numpy())
+                    
         return np.concatenate(latents, axis=0)
