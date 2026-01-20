@@ -10,19 +10,17 @@ from tqdm import tqdm
 
 def preprocess_spatial_latents(latents):
     if isinstance(latents, np.ndarray):
-        latents = torch.from_numpy(latents)
+        features = latents
+    else:
+        latents = latents.float().cpu()
+        features = latents.numpy()
     
-    latents = latents.float().cpu()
-    
-    if latents.dim() != 4:
-        raise ValueError(f"Oczekiwano latentów 4D [Batch, C, H, W], otrzymano: {list(latents.shape)}")
+    if features.ndim != 2:
+        raise ValueError(f"Oczekiwano latentów 2D [N, D], otrzymano: {list(features.shape)}")
         
-    print(f"[Preprocessing] Otrzymano latenty: {list(latents.shape)}")
-    print("[Preprocessing] Wykonywanie Global Average Pooling (uśrednianie HxW)...")
+    print(f"[Preprocessing] Otrzymano latenty: {list(features.shape)}")
+    print("[Preprocessing] Normalizacja L2...")
     
-    latents_pooled = torch.mean(latents, dim=[2, 3])
-    
-    features = latents_pooled.numpy()
     features = normalize(features, norm='l2', axis=1)
     
     return features
