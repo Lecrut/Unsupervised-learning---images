@@ -1,13 +1,11 @@
-# Run -> streamlit run gui.py
 #%% Imports
 import streamlit as st
 import torch
 import numpy as np
 import random
 import os
-import torch.nn.functional as F
 
-#%% Importy modułów projektu
+# Importy modułów projektu (Upewnij się, że masz folder src w tym samym katalogu)
 from src.data.damage import DAMAGE_FUNCTIONS
 from src.data.load_dataset import load_data
 from src.modules.autoencoder import Autoencoder
@@ -21,11 +19,101 @@ st.set_page_config(
 )
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+st.markdown("""
+    <style>
+        /* Import czcionek */
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600&family=Playfair+Display:wght@700&display=swap');
+        
+        /* --- 1. NAPRAWA PRZYCISKU MENU (LEWY GÓRNY RÓG) --- */
+
+        /* Zamiast ukrywać (display: none), robimy element przezroczystym.
+           Dzięki temu on nadal tam JEST i można go KLIKNĄĆ. */
+        [data-testid="stSidebarCollapsedControl"] {
+            color: transparent !important; /* Ukrywa tekst 'keyboard_double_arrow...' */
+            background: transparent !important;
+            border: none !important;
+            width: auto !important;
+            min-width: 80px !important; /* Wymuszamy szerokość, żeby przycisk się nie zapadł */
+        }
+
+        /* Ukrywamy ewentualne ikony SVG, jeśli się pojawią */
+        [data-testid="stSidebarCollapsedControl"] svg,
+        [data-testid="stSidebarCollapsedControl"] img {
+            display: none !important;
+        }
+
+        /* Wstawiamy nasz tekst MENU */
+        [data-testid="stSidebarCollapsedControl"]::after {
+            content: "MENU";
+            
+            /* Przywracamy widoczność tekstu dla naszego pseudoelementu */
+            color: #0F2C59 !important; 
+            font-family: 'Montserrat', sans-serif !important;
+            font-size: 13px !important;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            
+            /* Wygląd przycisku */
+            background: rgba(15, 44, 89, 0.08);
+            border-radius: 6px;
+            padding: 8px 16px;
+            
+            /* Pozycjonowanie */
+            display: inline-block;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        /* Efekt hover (najechania myszką) */
+        [data-testid="stSidebarCollapsedControl"]:hover::after {
+            background: rgba(15, 44, 89, 0.15);
+            color: #0F2C59;
+        }
+
+        /* --- 2. RESZTA STYLÓW (Bez zmian) --- */
+        .stApp { background-color: #F8F9FA; }
+        section[data-testid="stSidebar"] { background-color: #EBF1F7; border-right: 1px solid #D1D9E6; }
+        
+        h1, h2, h3 { font-family: 'Playfair Display', serif !important; color: #0F2C59 !important; }
+        p, div, span, label, button { font-family: 'Montserrat', sans-serif !important; }
+
+        /* Nawigacja */
+        div[role="radiogroup"] > label > div:first-child { display: none !important; }
+        div[role="radiogroup"] label {
+            background: transparent !important; border: none !important;
+            padding: 8px 16px; margin-bottom: 2px;
+            color: #0F2C59 !important; font-size: 16px;
+            transition: transform 0.2s;
+        }
+        div[role="radiogroup"] label:hover { transform: translateX(5px); font-weight: 600 !important; }
+        div[role="radiogroup"] label[data-checked="true"] { font-weight: 700 !important; }
+        div[role="radiogroup"] label p { color: #0F2C59 !important; }
+
+        /* Przycisk akcji */
+        .stButton > button {
+            background: #0F2C59 !important; color: white !important;
+            border-radius: 8px; border: none; padding: 10px 20px;
+        }
+        .stButton > button:hover { background: #1B3C73 !important; }
+
+        /* Karty */
+        .authors-box {
+            background: white; padding: 20px; border-radius: 12px;
+            border-left: 5px solid #0F2C59; box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            text-align: center; margin-top: 20px;
+        }
+        .footer-text { text-align: center; color: #64748B; font-size: 11px; margin-top: 10px; opacity: 0.8; }
+        
+        /* Ukrycie standardowego nagłówka */
+        header[data-testid="stHeader"] { background: transparent !important; }
+    </style>
+""", unsafe_allow_html=True)
+
+
 #%% Helper Functions
 def tensor_to_display_rgb(img_np):
     if isinstance(img_np, torch.Tensor):
         img_np = img_np.detach().cpu().numpy()
-        
     if img_np.shape[0] == 4: 
         img_np = img_np[:3, :, :]
     img_rgb = np.transpose(img_np, (1, 2, 0))
@@ -37,210 +125,134 @@ def generate_damage_on_the_fly(clean_tensor, seed):
     damaged_tensor = damage_function(clean_tensor)
     return damaged_tensor
 
-#%% Resource Loaders
+#%% Loaders
 @st.cache_resource
 def load_sr_resources():
     with st.spinner('Ładowanie modelu Super Resolution...'):
         _, test_loader, _ = load_data(add_fourth_channel=False, num_workers=0)
-        
-        sr_model = SuperResolutionModel(
-            input_channels=3,
-            scale=2,
-            learning_rate=0.,
-            load_best=True 
-        )
+        sr_model = SuperResolutionModel(input_channels=3, scale=2, learning_rate=0., load_best=True)
         sr_model.eval()
         sr_model.to(device)
     return test_loader, sr_model
 
 @st.cache_resource
 def load_ae_resources():
-    with st.spinner('Ładowanie modelu Autoencoder i danych...'):
+    with st.spinner('Ładowanie modelu Autoencoder...'):
         _, test_loader_rgba, _ = load_data(add_fourth_channel=True, num_workers=0)
-        
-        autoencoder = Autoencoder(
-            input_channels=4,
-            load_best=True 
-        )
+        autoencoder = Autoencoder(input_channels=4, load_best=True)
         autoencoder.eval()
         autoencoder.to(device)
-        
     return test_loader_rgba, autoencoder
 
-#%% WIDOKI (VIEWS)
+#%% VIEWS
 
 def view_home():
-    st.title("Centrum Renowacji Sztuki")
-    st.markdown("### Witaj w panelu demonstracyjnym")
-    st.write("Wybierz odpowiedni moduł z menu po lewej stronie, aby rozpocząć pracę.")
+    st.markdown("<h1>Centrum Renowacji Sztuki</h1>", unsafe_allow_html=True)
+    st.write("Wybierz narzędzie z menu po lewej stronie.")
     st.divider()
     
     col1, col2 = st.columns(2)
     with col1:
-        st.info("🎨 **Inpainting (AE)**")
-        st.caption("Symulacja uszkodzeń i ekstrakcja cech (Latent Space).")
-            
+        st.info("🎨 **Inpainting**\n\nSymulacja uszkodzeń i ekstrakcja cech.")
     with col2:
-        st.success("🔍 **Super Rozdzielczość**")
-        st.caption("Dwukrotne powiększanie obrazu przy użyciu sieci neuronowej.")
+        st.success("🔍 **Super Rozdzielczość**\n\nUpscaling obrazów (x2).")
 
-    st.write("")
-    st.write("")
-    st.write("") 
-    st.markdown(
-        """
-        <div style='text-align: center; color: #666;'>
-            <h5>Autorzy projektu</h5>
+    st.markdown("""
+        <div class="authors-box">
+            <div style="font-weight: bold; color: #0F2C59; margin-bottom: 5px;">Zespół Projektowy</div>
             Filip Lecrut • Piotr Jasiński • Jakub Kocałek
         </div>
-        """,
-        unsafe_allow_html=True
-    )
+    """, unsafe_allow_html=True)
 
 def view_inpainting():
-    st.title("Autoencoder Latent Extraction")
+    st.markdown("<h1>Autoencoder Latent Extraction</h1>", unsafe_allow_html=True)
     st.divider()
     
     try:
         test_loader, ae_model = load_ae_resources()
         dataset = test_loader.dataset
     except Exception as e:
-        st.error(f"Błąd ładowania Inpaintingu: {e}")
+        st.error(f"Błąd: {e}")
         st.stop()
 
-    if 'inp_image_index' not in st.session_state:
-        st.session_state['inp_image_index'] = random.randint(0, len(dataset) - 1)
-    if 'inp_damage_seed' not in st.session_state:
-        st.session_state['inp_damage_seed'] = random.randint(1, 10000)
+    if 'inp_idx' not in st.session_state: st.session_state['inp_idx'] = random.randint(0, len(dataset) - 1)
+    if 'inp_seed' not in st.session_state: st.session_state['inp_seed'] = random.randint(1, 10000)
 
-    _, col_center, _ = st.columns([3, 2, 3])
-    with col_center:
-        if st.button("🎲 Losuj nowe zdjęcie", key="btn_inp_new", use_container_width=True):
-            st.session_state['inp_image_index'] = random.randint(0, len(dataset) - 1)
-            st.session_state['inp_damage_seed'] = random.randint(1, 10000)
-            st.rerun()
+    _, c2, _ = st.columns([3, 2, 3])
+    if c2.button("Losuj obraz", key="btn_inp"):
+        st.session_state['inp_idx'] = random.randint(0, len(dataset) - 1)
+        st.session_state['inp_seed'] = random.randint(1, 10000)
+        st.rerun()
 
-    current_idx = st.session_state['inp_image_index']
-    current_seed = st.session_state['inp_damage_seed']
-
-    data_item = dataset[current_idx]
-    original_tensor = data_item[0] if isinstance(data_item, (tuple, list)) else data_item
+    data_item = dataset[st.session_state['inp_idx']]
+    orig_t = data_item[0] if isinstance(data_item, (tuple, list)) else data_item
+    dmg_t = generate_damage_on_the_fly(orig_t.clone(), st.session_state['inp_seed'])
     
-    original_np = tensor_to_display_rgb(original_tensor)
-
-    damaged_tensor = generate_damage_on_the_fly(original_tensor.clone(), current_seed)
-    damaged_np = tensor_to_display_rgb(damaged_tensor)
-
-    damaged_batch = damaged_tensor.unsqueeze(0).to(device)
     with torch.no_grad():
-        latent_vector = ae_model.encoder(damaged_batch)
+        latent = ae_model.encoder(dmg_t.unsqueeze(0).to(device))
 
-    fixed_np = np.zeros_like(original_np)
-    
     st.write("")
-    col1, col2, col3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
+    c1.markdown("### 1. Oryginał")
+    c1.image(tensor_to_display_rgb(orig_t), use_container_width=True)
     
-    with col1:
-        st.subheader("1. Oryginał")
-        st.image(original_np, use_container_width=True)
+    c2.markdown("### 2. Uszkodzone")
+    c2.image(tensor_to_display_rgb(dmg_t), use_container_width=True)
+    c2.caption(f"Latent: {tuple(latent.shape)}")
+    
+    c3.markdown("### 3. Naprawione")
+    c3.image(np.zeros_like(tensor_to_display_rgb(orig_t)), use_container_width=True)
+    c3.caption("Wkrótce...")
 
-    with col2:
-        st.subheader("2. Uszkodzone")
-        st.image(damaged_np, use_container_width=True)
-        st.caption(f"Latent shape: {tuple(latent_vector.shape)}")
-
-    with col3:
-        st.subheader("3. Naprawione")
-        st.image(fixed_np, use_container_width=True)
-        st.caption("Moduł naprawczy w budowie")
-
-def view_super_resolution():
-    st.title("Super Resolution (x2)")
+def view_sr():
+    st.markdown("<h1>Super Resolution (x2)</h1>", unsafe_allow_html=True)
     st.divider()
     
     try:
         test_loader, sr_model = load_sr_resources()
         dataset = test_loader.dataset
     except Exception as e:
-        st.error(f"Błąd ładowania SR: {e}")
+        st.error(f"Błąd: {e}")
         st.stop()
-    
-    if 'sr_image_index' not in st.session_state:
-        st.session_state['sr_image_index'] = random.randint(0, len(dataset) - 1)
-    
-    _, col_center, _ = st.columns([3, 2, 3])
-    with col_center:
-        if st.button("🎲 Losuj obraz do SR", key="btn_sr_new", use_container_width=True):
-            st.session_state['sr_image_index'] = random.randint(0, len(dataset) - 1)
-            st.rerun()
 
-    current_idx = st.session_state['sr_image_index']
-    data_item = dataset[current_idx]
-    input_tensor = data_item[0] if isinstance(data_item, (tuple, list)) else data_item
-    
-    if input_tensor.shape[0] == 4:
-        input_tensor = input_tensor[:3, :, :]
-    
-    input_batch = input_tensor.unsqueeze(0).to(device)
+    if 'sr_idx' not in st.session_state: st.session_state['sr_idx'] = random.randint(0, len(dataset) - 1)
 
+    _, c2, _ = st.columns([3, 2, 3])
+    if c2.button("Losuj obraz", key="btn_sr"):
+        st.session_state['sr_idx'] = random.randint(0, len(dataset) - 1)
+        st.rerun()
+
+    data_item = dataset[st.session_state['sr_idx']]
+    input_t = data_item[0] if isinstance(data_item, (tuple, list)) else data_item
+    if input_t.shape[0] == 4: input_t = input_t[:3]
+    
     with torch.no_grad():
-        sr_output, _ = sr_model(input_batch)
-    
-    input_np = tensor_to_display_rgb(input_tensor)
-    sr_np = tensor_to_display_rgb(sr_output[0])
+        out, _ = sr_model(input_t.unsqueeze(0).to(device))
 
     st.write("")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Wejście (Input)")
-        st.image(input_np, caption=f"Rozdzielczość: {input_np.shape[:2]}", use_container_width=False)
-    
-    with col2:
-        st.subheader("Wyjście (Super Res x2)")
-        st.image(sr_np, caption=f"Rozdzielczość: {sr_np.shape[:2]}", use_container_width=False)
+    c1, c2 = st.columns(2)
+    c1.markdown("### Wejście")
+    c1.image(tensor_to_display_rgb(input_t), caption=f"Rozdzielczość: {input_t.shape[1:]}")
+    c2.markdown("### Wyjście (x2)")
+    c2.image(tensor_to_display_rgb(out[0]), caption=f"Rozdzielczość: {out[0].shape[1:]}")
 
-#%% Main App Logic
+#%% Main
 def main():
     with st.sidebar:
-        st.title("Nawigacja")
+        # Tytuł nawigacji
+        st.markdown("<h1 style='text-align: center; margin-bottom: 20px;'>Nawigacja</h1>", unsafe_allow_html=True)
         
-        selected_page = st.radio(
-            "Wybór widoku", 
-            ["Strona Główna", "Odtwarzanie", "Super Rozdzielczość"],
-            label_visibility="collapsed"
-        )
+        # Menu (Zwykły tekst, stylizowany CSSem)
+        page = st.radio("Nav", ["Strona Główna", "Odtwarzanie", "Super Rozdzielczość"], label_visibility="collapsed")
         
-        st.markdown(
-            """
-            <style>
-                .sidebar-footer {
-                    position: fixed;
-                    bottom: 0;
-                    left: 0;
-                    width: 20rem;
-                    padding: 20px;
-                    text-align: center;
-                    color: grey;
-                    font-size: 12px;
-                    background-color: transparent;
-                    pointer-events: none;
-                    z-index: 100;
-                }
-            </style>
-            <div class="sidebar-footer">
-                Art Restoration Project v1.0
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        st.write("")
+        st.write("")
+        st.divider()
+        st.markdown("<div class='footer-text'>ART RESTORATION PROJECT v1.0</div>", unsafe_allow_html=True)
 
-    if selected_page == "Strona Główna":
-        view_home()
-    elif selected_page == "Odtwarzanie":
-        view_inpainting()
-    elif selected_page == "Super Rozdzielczość":
-        view_super_resolution()
+    if page == "Strona Główna": view_home()
+    elif page == "Odtwarzanie": view_inpainting()
+    elif page == "Super Rozdzielczość": view_sr()
 
 if __name__ == "__main__":
-    main()
+    main() 
