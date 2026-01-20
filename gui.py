@@ -1,3 +1,4 @@
+# Run: streamlit run gui.py
 #%% Imports
 import streamlit as st
 import torch
@@ -5,7 +6,7 @@ import numpy as np
 import random
 import os
 
-# Importy modułów projektu (Upewnij się, że masz folder src w tym samym katalogu)
+# --- TWOJE ORYGINALNE IMPORTY ---
 from src.data.damage import DAMAGE_FUNCTIONS
 from src.data.load_dataset import load_data
 from src.modules.autoencoder import Autoencoder
@@ -19,84 +20,101 @@ st.set_page_config(
 )
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# --- POPRAWIONY CSS ---
 st.markdown("""
     <style>
         /* Import czcionek */
         @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600&family=Playfair+Display:wght@700&display=swap');
         
-        /* --- 1. NAPRAWA PRZYCISKU MENU (LEWY GÓRNY RÓG) --- */
-
-        /* Zamiast ukrywać (display: none), robimy element przezroczystym.
-           Dzięki temu on nadal tam JEST i można go KLIKNĄĆ. */
+        /* 1. NAPRAWA PRZYCISKU SIDEBARA (ZACHOWANIE FUNKCJONALNOŚCI) */
         [data-testid="stSidebarCollapsedControl"] {
-            color: transparent !important; /* Ukrywa tekst 'keyboard_double_arrow...' */
+            color: transparent !important;
             background: transparent !important;
             border: none !important;
             width: auto !important;
-            min-width: 80px !important; /* Wymuszamy szerokość, żeby przycisk się nie zapadł */
+            min-width: 80px !important;
         }
 
-        /* Ukrywamy ewentualne ikony SVG, jeśli się pojawią */
+        /* Ukrywamy oryginalną ikonę, bo ona znikała przez zmianę fontu */
         [data-testid="stSidebarCollapsedControl"] svg,
         [data-testid="stSidebarCollapsedControl"] img {
             display: none !important;
         }
 
-        /* Wstawiamy nasz tekst MENU */
+        /* Dodajemy własny tekst "MENU" jako przycisk */
         [data-testid="stSidebarCollapsedControl"]::after {
             content: "MENU";
-            
-            /* Przywracamy widoczność tekstu dla naszego pseudoelementu */
             color: #0F2C59 !important; 
             font-family: 'Montserrat', sans-serif !important;
             font-size: 13px !important;
             font-weight: 600;
             letter-spacing: 0.5px;
-            
-            /* Wygląd przycisku */
             background: rgba(15, 44, 89, 0.08);
             border-radius: 6px;
             padding: 8px 16px;
-            
-            /* Pozycjonowanie */
             display: inline-block;
             white-space: nowrap;
             cursor: pointer;
         }
 
-        /* Efekt hover (najechania myszką) */
         [data-testid="stSidebarCollapsedControl"]:hover::after {
             background: rgba(15, 44, 89, 0.15);
-            color: #0F2C59;
         }
 
-        /* --- 2. RESZTA STYLÓW (Bez zmian) --- */
+        /* 2. PRECYZYJNE PRZYPISANIE CZCIONEK (BY NIE PSUĆ IKON) */
+        
         .stApp { background-color: #F8F9FA; }
         section[data-testid="stSidebar"] { background-color: #EBF1F7; border-right: 1px solid #D1D9E6; }
         
-        h1, h2, h3 { font-family: 'Playfair Display', serif !important; color: #0F2C59 !important; }
-        p, div, span, label, button { font-family: 'Montserrat', sans-serif !important; }
+        /* Nagłówki */
+        h1, h2, h3 { 
+            font-family: 'Playfair Display', serif !important; 
+            color: #0F2C59 !important; 
+        }
 
-        /* Nawigacja */
+        /* WAŻNE: Przypisujemy font tylko do kontenerów tekstowych, 
+           a nie do globalnych tagów 'span' czy 'div', co psuło ikony. */
+        
+        [data-testid="stMarkdownContainer"] p, 
+        [data-testid="stMarkdownContainer"] li, 
+        [data-testid="stMarkdownContainer"] div,
+        [data-testid="stCaptionContainer"] {
+            font-family: 'Montserrat', sans-serif !important;
+        }
+
+        /* Twoje klasy niestandardowe */
+        .authors-box, .footer-text, .custom-text {
+            font-family: 'Montserrat', sans-serif !important;
+        }
+
+        /* Nawigacja (Radio) */
         div[role="radiogroup"] > label > div:first-child { display: none !important; }
         div[role="radiogroup"] label {
-            background: transparent !important; border: none !important;
-            padding: 8px 16px; margin-bottom: 2px;
-            color: #0F2C59 !important; font-size: 16px;
+            font-family: 'Montserrat', sans-serif !important;
+            background: transparent !important; 
+            border: none !important;
+            padding: 8px 16px; 
+            margin-bottom: 2px;
+            color: #0F2C59 !important; 
+            font-size: 16px;
             transition: transform 0.2s;
         }
         div[role="radiogroup"] label:hover { transform: translateX(5px); font-weight: 600 !important; }
         div[role="radiogroup"] label[data-checked="true"] { font-weight: 700 !important; }
-        div[role="radiogroup"] label p { color: #0F2C59 !important; }
+        div[role="radiogroup"] label p { color: #0F2C59 !important; font-family: 'Montserrat', sans-serif !important; }
 
-        /* Przycisk akcji */
+        /* Przyciski */
         .stButton > button {
-            background: #0F2C59 !important; color: white !important;
-            border-radius: 8px; border: none; padding: 10px 20px;
+            font-family: 'Montserrat', sans-serif !important;
+            background: #0F2C59 !important; 
+            color: white !important;
+            border-radius: 8px; 
+            border: none; 
+            padding: 10px 20px;
         }
         .stButton > button:hover { background: #1B3C73 !important; }
 
-        /* Karty */
+        /* Styl kart autorskich */
         .authors-box {
             background: white; padding: 20px; border-radius: 12px;
             border-left: 5px solid #0F2C59; box-shadow: 0 4px 6px rgba(0,0,0,0.05);
@@ -104,7 +122,6 @@ st.markdown("""
         }
         .footer-text { text-align: center; color: #64748B; font-size: 11px; margin-top: 10px; opacity: 0.8; }
         
-        /* Ukrycie standardowego nagłówka */
         header[data-testid="stHeader"] { background: transparent !important; }
     </style>
 """, unsafe_allow_html=True)
@@ -130,6 +147,7 @@ def generate_damage_on_the_fly(clean_tensor, seed):
 def load_sr_resources():
     with st.spinner('Ładowanie modelu Super Resolution...'):
         _, test_loader, _ = load_data(add_fourth_channel=False, num_workers=0)
+        # UWAGA: Upewnij się, że ścieżki i parametry w SuperResolutionModel są poprawne dla Twojego projektu
         sr_model = SuperResolutionModel(input_channels=3, scale=2, learning_rate=0., load_best=True)
         sr_model.eval()
         sr_model.to(device)
@@ -139,6 +157,7 @@ def load_sr_resources():
 def load_ae_resources():
     with st.spinner('Ładowanie modelu Autoencoder...'):
         _, test_loader_rgba, _ = load_data(add_fourth_channel=True, num_workers=0)
+        # UWAGA: Upewnij się, że parametry Autoencoder są poprawne
         autoencoder = Autoencoder(input_channels=4, load_best=True)
         autoencoder.eval()
         autoencoder.to(device)
@@ -172,7 +191,7 @@ def view_inpainting():
         test_loader, ae_model = load_ae_resources()
         dataset = test_loader.dataset
     except Exception as e:
-        st.error(f"Błąd: {e}")
+        st.error(f"Błąd ładowania zasobów Autoencodera: {e}")
         st.stop()
 
     if 'inp_idx' not in st.session_state: st.session_state['inp_idx'] = random.randint(0, len(dataset) - 1)
@@ -212,7 +231,7 @@ def view_sr():
         test_loader, sr_model = load_sr_resources()
         dataset = test_loader.dataset
     except Exception as e:
-        st.error(f"Błąd: {e}")
+        st.error(f"Błąd ładowania zasobów SR: {e}")
         st.stop()
 
     if 'sr_idx' not in st.session_state: st.session_state['sr_idx'] = random.randint(0, len(dataset) - 1)
@@ -255,4 +274,4 @@ def main():
     elif page == "Super Rozdzielczość": view_sr()
 
 if __name__ == "__main__":
-    main() 
+    main()
