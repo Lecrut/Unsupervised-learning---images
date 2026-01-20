@@ -20,7 +20,7 @@ class SuperResolutionModel(Autoencoder):
                  load_best=False,
                  image_size=None):
         
-        super().__init__(latent_dim=0, input_channels=input_channels, learning_rate=learning_rate, use_amp=use_amp, load_best=False)
+        super().__init__(input_channels=input_channels, learning_rate=learning_rate, use_amp=use_amp, load_best=False)
         
         self.scale = scale
         self.best_model_path = Path('checkpoints/super_resolution/best_fast_anchor_x2.pt')
