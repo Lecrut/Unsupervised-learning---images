@@ -186,3 +186,29 @@ def plot_clustered_images(images_loader, labels, samples_per_cluster=5):
     plt.suptitle('Sample Images from Each Cluster', fontsize=16)
     plt.tight_layout()
     plt.show()
+
+#%% predict on ready model
+def predict_cluster_labels(pca_model, scaler, gmm_model, umap_model, latents, visualize=True):
+    clean_features = preprocess_spatial_latents(latents)
+    
+    features_scaled = scaler.transform(clean_features)
+    
+    latents_pca = pca_model.transform(features_scaled)
+    
+    predicted_labels = gmm_model.predict(latents_pca)
+    
+    if visualize:
+        print("[UMAP] Generowanie wizualizacji dla nowych danych...")
+        embedding = umap_model.transform(latents_pca)
+        
+        n_clusters = len(np.unique(predicted_labels))
+        
+        plt.figure(figsize=(10, 7))
+        scatter = plt.scatter(embedding[:, 0], embedding[:, 1], c=predicted_labels, cmap='Spectral', s=15, alpha=0.8)
+        plt.colorbar(scatter, label='Cluster ID')
+        plt.title(f'UMAP Projection - Predicted Clusters ({n_clusters} clusters)')
+        plt.xlabel('UMAP 1')
+        plt.ylabel('UMAP 2')
+        plt.show()
+    
+    return predicted_labels

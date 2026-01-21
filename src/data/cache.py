@@ -113,3 +113,5 @@ def load_or_create_damaged_loader(original_loader, damaged_dir, augmentation=Fal
 #%% Inpainter DataLoader
 def create_in_painter_dataloader(original_loader):
     return make_damage_loader(original_loader, shuffle=False)
+
+
