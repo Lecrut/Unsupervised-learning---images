@@ -66,10 +66,8 @@ class LatentInpainter(nn.Module):
         self.use_amp = use_amp and torch.cuda.is_available()
         self.best_model_path = Path('checkpoints/best_inpainter.pt')
         
-        # 1. EMBEDDING: Zamienia numer klasy (int) na wektor stylu
         self.label_embedding = nn.Embedding(num_clusters, embedding_dim)
         
-        # 2. ENCODER BLOCK: Wejście to Latent + Embedding (sklejone)
         input_dim = latent_channels + embedding_dim
         
         self.encoder_block = nn.Sequential(
@@ -78,7 +76,6 @@ class LatentInpainter(nn.Module):
             nn.GELU()
         )
         
-        # 3. MIDDLE BLOCK: Kontekst i naprawa
         self.middle_block = nn.Sequential(
             DilatedResidualBlock(hidden_channels, dilation=1),
             DilatedResidualBlock(hidden_channels, dilation=2),
@@ -86,8 +83,7 @@ class LatentInpainter(nn.Module):
             DilatedResidualBlock(hidden_channels, dilation=2),
             DilatedResidualBlock(hidden_channels, dilation=1),
         )
-        
-        # 4. DECODER BLOCK: Powrót do latent space
+
         self.decoder_block = nn.Sequential(
             nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(hidden_channels),
@@ -95,7 +91,6 @@ class LatentInpainter(nn.Module):
             nn.Conv2d(hidden_channels, latent_channels, kernel_size=3, padding=1)
         )
 
-        # 5. KLASYFIKATOR POMOCNICZY (Dba o zgodność semantyczną)
         self.classifier = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
@@ -123,21 +118,19 @@ class LatentInpainter(nn.Module):
         # x: [Batch, 32, 8, 8]
         # labels: [Batch] (int)
         
-        # A. Zamiana labela na mapę cech [Batch, 32, 1, 1]
+        # Zamiana labela na mapę cech [Batch, 32, 1, 1]
         emb = self.label_embedding(labels)
         
-        # B. Rozciągnięcie do rozmiaru obrazu [Batch, 32, 8, 8]
+        # To size [Batch, 32, 8, 8]
         emb_map = emb.view(emb.size(0), emb.size(1), 1, 1).expand(-1, -1, x.size(2), x.size(3))
         
-        # C. Sklejenie (Concatenate) -> [Batch, 64, 8, 8]
+        # Concat
         x_input = torch.cat([x, emb_map], dim=1)
         
-        # D. Przetwarzanie przez sieć
         enc = self.encoder_block(x_input)
         mid = self.middle_block(enc)
         correction = self.decoder_block(mid)
         
-        # Residual connection
         return x + correction
 
     def forward_train(self, x, labels):
@@ -146,12 +139,10 @@ class LatentInpainter(nn.Module):
         return repaired, class_logits
 
     def compute_loss(self, repaired_latent, target_latent, pred_logits, target_labels):
-        # Rekonstrukcja (Mieszanka MSE i L1 dla ostrości)
         l_mse = self.mse_loss(repaired_latent, target_latent)
         l_l1 = self.l1_loss(repaired_latent, target_latent)
         loss_recon = 0.5 * l_mse + 0.5 * l_l1
         
-        # Klasyfikacja (Spójność semantyczna)
         if self.class_loss_weight > 0:
             loss_class = self.ce_loss(pred_logits, target_labels)
         else:
@@ -171,12 +162,10 @@ class LatentInpainter(nn.Module):
         loop = tqdm(train_loader, desc="Training")
         
         for batch_idx, (clean_batch, corr_batch, labels) in enumerate(loop):
-            # Przenoszenie danych na GPU
             clean_data = clean_batch.to(self.device, non_blocking=True)
             corr_data = corr_batch.to(self.device, non_blocking=True)
-            labels = labels.to(self.device, dtype=torch.long) # Labels muszą być LongTensor
+            labels = labels.to(self.device, dtype=torch.long) 
 
-            # Obsługa Cache vs Encoder Online
             if encoder_model is not None:
                 with torch.no_grad():
                     clean_z = encoder_model(clean_data)
@@ -188,7 +177,6 @@ class LatentInpainter(nn.Module):
             self.optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
-                # Przekazujemy LABELS do forward_train
                 repaired_z, logits = self.forward_train(corr_z, labels)
                 loss, l_recon, l_class = self.compute_loss(repaired_z, clean_z, logits, labels)
 
