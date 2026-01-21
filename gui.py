@@ -246,7 +246,7 @@ def view_sr():
     if input_t.shape[0] == 4: input_t = input_t[:3]
     
     with torch.no_grad():
-        out, _ = sr_model(input_t.unsqueeze(0).to(device))
+        out = sr_model(input_t.unsqueeze(0).to(device))
 
     st.write("")
     c1, c2 = st.columns(2)
