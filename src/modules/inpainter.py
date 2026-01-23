@@ -6,13 +6,8 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-# --- BLOKI POMOCNICZE (Attention & Dilation) ---
 
 class ChannelAttention(nn.Module):
-    """
-    Mechanizm uwagi (SE-Block). Pozwala sieci zdecydować, które kanały w latent space
-    są ważne dla rekonstrukcji, a które to szum/tło.
-    """
     def __init__(self, channels, reduction=8):
         super().__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
@@ -30,10 +25,6 @@ class ChannelAttention(nn.Module):
         return x * y.expand_as(x)
 
 class DilatedResidualBlock(nn.Module):
-    """
-    Residual Block z Dylatacją. Pozwala zwiększyć pole widzenia (Receptive Field)
-    bez zmniejszania wymiarów obrazu (pooling). Kluczowe dla Inpaintingu 8x8.
-    """
     def __init__(self, channels, dilation):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=dilation, dilation=dilation, bias=False)
@@ -47,15 +38,15 @@ class DilatedResidualBlock(nn.Module):
         residual = x
         out = self.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
-        out = self.attn(out) # Aplikujemy uwagę kanałową
+        out = self.attn(out)
         return self.relu(out + residual)
 
-# --- GŁÓWNA KLASA INPAINTERA ---
 
 class LatentInpainter(nn.Module):
     def __init__(self, 
                  latent_channels=32,
-                 num_clusters=10,
+                 num_clusters=12,
+                 embedding_dim=32,
                  hidden_channels=128,
                  learning_rate=0.001,
                  use_amp=True,
@@ -66,6 +57,7 @@ class LatentInpainter(nn.Module):
 
         self.latent_channels = latent_channels
         self.num_clusters = num_clusters
+        self.embedding_dim = embedding_dim
         self.learning_rate = learning_rate
         self.class_loss_weight = class_loss_weight
         self.current_epoch = 0
@@ -74,23 +66,24 @@ class LatentInpainter(nn.Module):
         self.use_amp = use_amp and torch.cuda.is_available()
         self.best_model_path = Path('checkpoints/best_inpainter.pt')
         
+        self.label_embedding = nn.Embedding(num_clusters, embedding_dim)
+        
+        input_dim = latent_channels + embedding_dim
+        
         self.encoder_block = nn.Sequential(
-            nn.Conv2d(latent_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.Conv2d(input_dim, hidden_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(hidden_channels),
             nn.GELU()
         )
         
-        # 2. Główny rdzeń naprawczy (Context Aggregation)
-        # Sekwencja bloków o różnej dylatacji pozwala 'zrozumieć' strukturę całego latenta 8x8
         self.middle_block = nn.Sequential(
-            DilatedResidualBlock(hidden_channels, dilation=1), # Detale
-            DilatedResidualBlock(hidden_channels, dilation=2), # Średni zasięg
-            DilatedResidualBlock(hidden_channels, dilation=4), # Cały obraz (8x8)
+            DilatedResidualBlock(hidden_channels, dilation=1),
+            DilatedResidualBlock(hidden_channels, dilation=2),
+            DilatedResidualBlock(hidden_channels, dilation=4),
             DilatedResidualBlock(hidden_channels, dilation=2),
             DilatedResidualBlock(hidden_channels, dilation=1),
         )
-        
-        # 3. Adapter wyjściowy
+
         self.decoder_block = nn.Sequential(
             nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(hidden_channels),
@@ -121,22 +114,33 @@ class LatentInpainter(nn.Module):
         if load_best and self.best_model_path.exists():
             self.load_checkpoint()
 
-    def forward(self, x):
-        # Residual Learning: Uczymy się tylko poprawki do zepsutego wejścia
-        enc = self.encoder_block(x)
+    def forward(self, x, labels):
+        # x: [Batch, 32, 8, 8]
+        # labels: [Batch] (int)
+        
+        # Zamiana labela na mapę cech [Batch, 32, 1, 1]
+        emb = self.label_embedding(labels)
+        
+        # To size [Batch, 32, 8, 8]
+        emb_map = emb.view(emb.size(0), emb.size(1), 1, 1).expand(-1, -1, x.size(2), x.size(3))
+        
+        # Concat
+        x_input = torch.cat([x, emb_map], dim=1)
+        
+        enc = self.encoder_block(x_input)
         mid = self.middle_block(enc)
         correction = self.decoder_block(mid)
+        
         return x + correction
 
-    def forward_train(self, x):
-        repaired = self.forward(x)
+    def forward_train(self, x, labels):
+        repaired = self.forward(x, labels)
         class_logits = self.classifier(repaired)
         return repaired, class_logits
 
     def compute_loss(self, repaired_latent, target_latent, pred_logits, target_labels):
         l_mse = self.mse_loss(repaired_latent, target_latent)
         l_l1 = self.l1_loss(repaired_latent, target_latent)
-        
         loss_recon = 0.5 * l_mse + 0.5 * l_l1
         
         if self.class_loss_weight > 0:
@@ -149,8 +153,7 @@ class LatentInpainter(nn.Module):
 
     def train_epoch(self, train_loader, encoder_model=None):
         self.train()
-        if encoder_model:
-            encoder_model.eval() 
+        if encoder_model: encoder_model.eval() 
         
         epoch_loss = 0.0
         epoch_recon = 0.0
@@ -161,11 +164,8 @@ class LatentInpainter(nn.Module):
         for batch_idx, (clean_batch, corr_batch, labels) in enumerate(loop):
             clean_data = clean_batch.to(self.device, non_blocking=True)
             corr_data = corr_batch.to(self.device, non_blocking=True)
-            labels = labels.to(self.device, dtype=torch.long)
+            labels = labels.to(self.device, dtype=torch.long) 
 
-            # LOGIKA HYBRYDOWA:
-            # Jeśli mamy encoder -> kodujemy obrazy (wolne)
-            # Jeśli nie mamy encodera -> zakładamy, że to już są latenty (szybkie)
             if encoder_model is not None:
                 with torch.no_grad():
                     clean_z = encoder_model(clean_data)
@@ -177,7 +177,7 @@ class LatentInpainter(nn.Module):
             self.optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
-                repaired_z, logits = self.forward_train(corr_z)
+                repaired_z, logits = self.forward_train(corr_z, labels)
                 loss, l_recon, l_class = self.compute_loss(repaired_z, clean_z, logits, labels)
 
             self.scaler.scale(loss).backward()
@@ -206,28 +206,24 @@ class LatentInpainter(nn.Module):
     @torch.no_grad()
     def validate_epoch(self, val_loader, encoder_model=None):
         self.eval()
-        if encoder_model:
-            encoder_model.eval()
+        if encoder_model: encoder_model.eval()
         
         epoch_loss = 0.0
         
-        loop = tqdm(val_loader, desc="Validation")
-        
-        for batch_idx, (clean_batch, corr_batch, labels) in enumerate(loop):
+        for batch_idx, (clean_batch, corr_batch, labels) in enumerate(val_loader):
             clean_data = clean_batch.to(self.device, non_blocking=True)
             corr_data = corr_batch.to(self.device, non_blocking=True)
             labels = labels.to(self.device, dtype=torch.long)
 
             if encoder_model is not None:
-                with torch.no_grad():
-                    clean_z = encoder_model(clean_data)
-                    corr_z = encoder_model(corr_data)
+                clean_z = encoder_model(clean_data)
+                corr_z = encoder_model(corr_data)
             else:
                 clean_z = clean_data
                 corr_z = corr_data
 
             with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
-                repaired_z, logits = self.forward_train(corr_z)
+                repaired_z, logits = self.forward_train(corr_z, labels)
                 loss, _, _ = self.compute_loss(repaired_z, clean_z, logits, labels)
 
             epoch_loss += loss.item()
@@ -254,8 +250,8 @@ class LatentInpainter(nn.Module):
             final_div_factor=1000.0,
             anneal_strategy='cos'
         )
-
-        print(f"Start treningu Inpaintera na urządzeniu: {self.device}")
+        
+        print(f"Start treningu (Conditional) na urządzeniu: {self.device}")
 
         for epoch in range(epochs):
             self.current_epoch = epoch
@@ -267,13 +263,12 @@ class LatentInpainter(nn.Module):
                 val_metrics = self.validate_epoch(val_loader, encoder_model)
 
             self.history['train_loss'].append(train_metrics['loss'])
-            self.history['val_loss'].append(val_metrics['loss'])
+            if val_loader: self.history['val_loss'].append(val_metrics['loss'])
 
             val_str = f"| Val: {val_metrics['loss']:.4f}" if val_loader else ""
             print(f"Epoch {epoch+1}/{epochs} | "
                   f"Train: {train_metrics['loss']:.4f} (Rec:{train_metrics['recon_loss']:.3f}, Cls:{train_metrics['class_loss']:.3f}) "
                   f"{val_str}")
-
 
             current_val_loss = val_metrics['loss'] if val_loader else train_metrics['loss']
             
