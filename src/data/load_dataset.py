@@ -22,7 +22,7 @@ def preprocess(batch, image_size=IMAGE_SIZE):
         transforms.ToTensor(),
     ])
 
-    batch['image'] = [transform(img.convert('RGB')).to(device) for img in batch['image']]
+    batch['image'] = [transform(img.convert('RGB')) for img in batch['image']]
     return batch
 
 #%% Preprocessing function with alpha channel
@@ -32,7 +32,7 @@ def preprocess_with_alpha(batch, image_size=IMAGE_SIZE):
         transforms.ToTensor(),
     ])
 
-    batch['image'] = [transform(img.convert('RGBA')).to(device) for img in batch['image']]
+    batch['image'] = [transform(img.convert('RGBA')) for img in batch['image']]
     return batch
 
 #%% Preprocessing function for paired images (small, big)
@@ -47,8 +47,8 @@ def preprocess_paired(batch, size_small=IMAGE_SIZE, size_big=IMAGE_SIZE_BIGGER):
     ])
 
     images = [img.convert('RGB') for img in batch['image']]
-    batch['small'] = [transform_small(img).to(device) for img in images]
-    batch['big'] = [transform_big(img).to(device) for img in images]
+    batch['small'] = [transform_small(img) for img in images]
+    batch['big'] = [transform_big(img) for img in images]
     return batch
 
 #%% Image Dataset Wrapper
@@ -180,7 +180,7 @@ def concatenate_fn(batch):
     if not all(isinstance(x, torch.Tensor) for x in batch):
         raise TypeError("concatenate_fn expected all batch elements to be Tensor")
 
-    batch_cpu = [x.cpu() for x in batch]
+    batch_cpu = [x.cpu() if x.is_cuda else x for x in batch]
     return torch.stack(batch_cpu, dim=0)
 
 #%% Function to shuffle data (correct images and damaged)

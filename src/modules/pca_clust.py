@@ -18,8 +18,8 @@ def preprocess_spatial_latents(latents):
     if features.ndim != 2:
         raise ValueError(f"Oczekiwano latentów 2D [N, D], otrzymano: {list(features.shape)}")
         
-    print(f"[Preprocessing] Otrzymano latenty: {list(features.shape)}")
-    print("[Preprocessing] Normalizacja L2...")
+    # print(f"[Preprocessing] Otrzymano latenty: {list(features.shape)}")
+    # print("[Preprocessing] Normalizacja L2...")
     
     features = normalize(features, norm='l2', axis=1)
     
@@ -86,6 +86,45 @@ def plot_umap(features, labels, n_clusters):
     
     return reducer, embedding
 
+#%% show num of images per cluster
+def plot_cluster_stats(labels):
+    """
+    Wyświetla tekstowe statystyki oraz wykres słupkowy liczebności klastrów.
+    """
+    unique_labels, counts = np.unique(labels, return_counts=True)
+    total_samples = len(labels)
+    
+    print("\n[Statystyki] Rozkład próbek w klastrach:")
+    print(f"{'Klaster ID':<12} | {'Liczba':<10} | {'Udział %':<10}")
+    print("-" * 42)
+    
+    for label, count in zip(unique_labels, counts):
+        share = (count / total_samples) * 100
+        print(f"{label:<12} | {count:<10} | {share:.1f}%")
+    print("-" * 42)
+    print(f"Łącznie próbek: {total_samples}\n")
+
+    # Generowanie wykresu słupkowego
+    plt.figure(figsize=(8, 4))
+    bars = plt.bar(unique_labels, counts, color='skyblue', edgecolor='grey', alpha=0.8)
+    
+    plt.title("Liczebność próbek w poszczególnych klastrach")
+    plt.xlabel("ID Klastra")
+    plt.ylabel("Liczba próbek")
+    plt.xticks(unique_labels)
+    plt.grid(axis='y', linestyle='--', alpha=0.3)
+    
+    # Dodanie wartości liczbowych nad słupkami
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height,
+                 f'{int(height)}',
+                 ha='center', va='bottom', fontsize=10)
+    
+    plt.tight_layout()
+    plt.show()
+
+
 def run_clustering_pipeline(latents, min_clusters=3, max_clusters=15):
   
     
@@ -96,6 +135,8 @@ def run_clustering_pipeline(latents, min_clusters=3, max_clusters=15):
     labels, gmm_model, optimal_k = find_optimal_clusters(pca_features, 
                                                          min_k=min_clusters, 
                                                          max_k=max_clusters)
+    
+    plot_cluster_stats(labels)
     
     umap_model, embedding = plot_umap(pca_features, labels, optimal_k)
     
@@ -150,6 +191,7 @@ def plot_clustered_images(images_loader, labels, samples_per_cluster=5):
                 img_tensor = imgs[local_idx]
                 
                 img = img_tensor.permute(1, 2, 0).cpu().numpy()
+                img = img[:, :, :3]
                 
                 img = (img - img.min()) / (img.max() - img.min())
                 
