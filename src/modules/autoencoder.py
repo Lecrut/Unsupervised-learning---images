@@ -88,11 +88,19 @@ class Autoencoder(nn.Module):
         return entropy_samples - entropy_batch
 
     def compute_rec_loss(self, img, rec):
-        loss_l1 = self.l1(rec, img)
-        with torch.no_grad():
-            lap_img = self.lap(img)
-        lap_rec = self.lap(rec)
-        return 1.0 * loss_l1 + 2.0 * F.l1_loss(lap_rec, lap_img)
+        charb = lambda x, y: torch.mean(torch.sqrt((x.float() - y.float())**2 + 1e-6))
+
+        loss_pix = charb(rec, img)
+
+        grad_img = K.filters.spatial_gradient(img, order=1)
+        grad_rec = K.filters.spatial_gradient(rec, order=1)
+        loss_grad = charb(grad_rec, grad_img)
+
+        fft_img = torch.fft.rfft2(img.float(), norm="ortho")
+        fft_rec = torch.fft.rfft2(rec.float(), norm="ortho")
+        loss_fft = F.l1_loss(torch.abs(fft_rec), torch.abs(fft_img))
+
+        return 1.0 * loss_pix + 0.5 * loss_grad + 0.1 * loss_fft
 
     def save_checkpoint(self, path=None, epoch=0, loss=0.0):
         if path is None: path = self.save_path
@@ -215,17 +223,18 @@ class Autoencoder(nn.Module):
                     for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]"):
                         img = batch[0] if isinstance(batch, (list, tuple)) else batch
                         img = img.to(self.device, non_blocking=True)
-                        
-                        rec, logits, _, _ = self(img)
-                        loss_rec = self.compute_rec_loss(img, rec)
-                        
-                        if not is_warmup:
-                            loss_clust = self.compute_cluster_loss(logits)
-                            val_batch_loss = loss_rec + 0.1 * loss_clust
-                        else:
-                            val_batch_loss = loss_rec
+
+                        with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
+                            rec, logits, _, _ = self(img)
+                            loss_rec = self.compute_rec_loss(img, rec)
                             
-                        val_loss_accum += val_batch_loss.item()
+                            if not is_warmup:
+                                loss_clust = self.compute_cluster_loss(logits)
+                                val_batch_loss = loss_rec + 0.1 * loss_clust
+                            else:
+                                val_batch_loss = loss_rec
+                                
+                            val_loss_accum += val_batch_loss.item()
                 
                 avg_val_loss = val_loss_accum / len(val_loader)
                 self.history['val_loss'].append(avg_val_loss)
