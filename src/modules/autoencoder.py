@@ -9,11 +9,12 @@ from pathlib import Path
 
 from .encoder import Encoder
 from .decoder import Decoder
+from ..comet.utils import CometModel
 
 class Autoencoder(nn.Module):
     def __init__(
         self,
-        latent_channels=32,
+        latent_channels=64,
         input_channels=4,
         num_prototypes=20,
         proto_dim=128,
@@ -21,6 +22,7 @@ class Autoencoder(nn.Module):
         max_lr=1e-3,      
         use_amp=True,
         load_best=False,
+        use_comet=True,
     ):
         super().__init__()
 
@@ -33,6 +35,12 @@ class Autoencoder(nn.Module):
         self.model_loaded = False
         
         self.history = {'train_loss': [], 'val_loss': [], 'learning_rates': []}
+        
+        self.comet_logger = CometModel(
+            experiment_name="autoencoder_training",
+            use_comet=use_comet,
+            use_local=True
+        ) if use_comet else None
         
         self.encoder = Encoder(latent_channels, input_channels)
         self.decoder = Decoder(latent_channels, input_channels)
@@ -149,6 +157,20 @@ class Autoencoder(nn.Module):
     def fit(self, train_loader, val_loader=None, epochs=50, early_stopping_patience=10, warmup_epochs=5):
         print(f"Start treningu: {epochs} epok (Warmup: {warmup_epochs}) | AMP: {self.use_amp}")
         
+        if self.comet_logger:
+            self.comet_logger.log_parameters({
+                'latent_channels': self.encoder.latent_channels if hasattr(self.encoder, 'latent_channels') else 32,
+                'input_channels': self.encoder.input_channels if hasattr(self.encoder, 'input_channels') else 4,
+                'num_prototypes': self.num_prototypes,
+                'learning_rate': self.lr,
+                'max_lr': self.max_lr,
+                'epochs': epochs,
+                'warmup_epochs': warmup_epochs,
+                'early_stopping_patience': early_stopping_patience,
+                'use_amp': self.use_amp,
+                'batch_size': train_loader.batch_size if hasattr(train_loader, 'batch_size') else 'N/A'
+            })
+        
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             max_lr=self.max_lr,
@@ -211,7 +233,11 @@ class Autoencoder(nn.Module):
             
             avg_train_loss = train_loss_accum / len(train_loader)
             self.history['train_loss'].append(avg_train_loss)
-            self.history['learning_rates'].extend(lrs) # Dodajemy listę LR z całej epoki
+            self.history['learning_rates'].extend(lrs)
+            
+            if self.comet_logger:
+                self.comet_logger.log_metric('train_loss', avg_train_loss, step=epoch)
+                self.comet_logger.log_metric('learning_rate', lrs[-1], step=epoch)
 
             avg_val_loss = 0.0
             
@@ -239,6 +265,9 @@ class Autoencoder(nn.Module):
                 avg_val_loss = val_loss_accum / len(val_loader)
                 self.history['val_loss'].append(avg_val_loss)
                 
+                if self.comet_logger:
+                    self.comet_logger.log_metric('val_loss', avg_val_loss, step=epoch)
+                
                 print(f" -> Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
 
                 if avg_val_loss < best_val_loss:
@@ -252,6 +281,11 @@ class Autoencoder(nn.Module):
                         break
             else:
                 self.save_checkpoint(epoch=epoch, loss=avg_train_loss)
+        
+        if self.comet_logger:
+            if self.save_path.exists():
+                self.comet_logger.log_model('autoencoder_best', str(self.save_path))
+            self.comet_logger.end()
                 
         return self.history
     
