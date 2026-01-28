@@ -14,7 +14,7 @@ from ..comet.utils import CometModel
 class Autoencoder(nn.Module):
     def __init__(
         self,
-        latent_channels=64,
+        latent_channels=32,
         input_channels=4,
         num_prototypes=20,
         proto_dim=128,
