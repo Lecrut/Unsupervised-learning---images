@@ -7,28 +7,17 @@ import numpy as np
 from tqdm import tqdm
 
 class FiLMLayer(nn.Module):
-    """
-    Feature-wise Linear Modulation.
-    Wstrzykuje informację o stylu (embedding klastra) w kanały obrazu.
-    Działa lepiej niż proste łączenie (concatenation).
-    """
     def __init__(self, channels, embedding_dim):
         super().__init__()
-        # Warstwy uczące się skalowania (gamma) i przesunięcia (beta)
         self.scale = nn.Linear(embedding_dim, channels)
         self.shift = nn.Linear(embedding_dim, channels)
 
     def forward(self, x, embedding):
         s = self.scale(embedding).unsqueeze(2).unsqueeze(3)
         h = self.shift(embedding).unsqueeze(2).unsqueeze(3)
-        # Wzór: out = x * (1 + scale) + shift
         return x * (1 + s) + h
 
 class SelfAttention(nn.Module):
-    """
-    Mechanizm Attention dla małych map (8x8).
-    Pozwala modelowi 'patrzeć' na cały obrazek naraz, żeby zrozumieć kontekst globalny.
-    """
     def __init__(self, channels):
         super().__init__()
         self.mha = nn.MultiheadAttention(embed_dim=channels, num_heads=4, batch_first=True)
@@ -36,19 +25,14 @@ class SelfAttention(nn.Module):
 
     def forward(self, x):
         b, c, h, w = x.size()
-        # Reshape do sekwencji: [B, H*W, C]
         x_flat = x.view(b, c, -1).permute(0, 2, 1)
         
         attn_out, _ = self.mha(x_flat, x_flat, x_flat)
         x_flat = self.norm(x_flat + attn_out)
         
-        # Powrót do obrazu: [B, C, H, W]
         return x_flat.permute(0, 2, 1).view(b, c, h, w)
 
 class ConditionalResidualBlock(nn.Module):
-    """
-    Blok ResNet sterowany stylem (FiLM).
-    """
     def __init__(self, channels, embedding_dim, dilation=1):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=dilation, dilation=dilation, bias=False)
@@ -134,10 +118,6 @@ class LatentInpainter(nn.Module):
             self.load()
 
     def forward(self, x, return_logits=False):
-        """
-        Główny przepływ danych.
-        UWAGA: Ta metoda NIE przyjmuje labels! Sama je zgaduje.
-        """
         logits = self.classifier(x) 
         
         probs = F.softmax(logits, dim=1) 
@@ -160,10 +140,6 @@ class LatentInpainter(nn.Module):
         return repaired
 
     def fit(self, train_loader, epochs=10):
-        """
-        Pętla treningowa. 
-        Tutaj (i tylko tutaj) używamy 'labels', żeby nauczyć detektywa.
-        """
         best_loss = float('inf')
         
         for epoch in range(epochs):
@@ -211,10 +187,6 @@ class LatentInpainter(nn.Module):
                 self.save(self.save_path)
 
     def predict(self, corrupted_latent):
-        """
-        Metoda do użycia na produkcji.
-        Przyjmuje TYLKO zepsuty latent. Nie wymaga labels.
-        """
         self.eval()
         with torch.no_grad():
             if corrupted_latent.dim() == 3:
@@ -222,7 +194,6 @@ class LatentInpainter(nn.Module):
             
             corrupted_latent = corrupted_latent.to(self.device)
             
-            # Sieć sama zgaduje klaster i naprawia
             repaired = self.forward(corrupted_latent)
             
             return repaired
