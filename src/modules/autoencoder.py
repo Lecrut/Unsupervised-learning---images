@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .encoder import Encoder
 from .decoder import Decoder
+from ..comet.utils import CometModel
 
 class Autoencoder(nn.Module):
     def __init__(
@@ -21,6 +22,7 @@ class Autoencoder(nn.Module):
         max_lr=1e-3,      
         use_amp=True,
         load_best=False,
+        use_comet=True,
     ):
         super().__init__()
 
@@ -33,6 +35,12 @@ class Autoencoder(nn.Module):
         self.model_loaded = False
         
         self.history = {'train_loss': [], 'val_loss': [], 'learning_rates': []}
+        
+        self.comet_logger = CometModel(
+            experiment_name="autoencoder_training",
+            use_comet=use_comet,
+            use_local=True
+        ) if use_comet else None
         
         self.encoder = Encoder(latent_channels, input_channels)
         self.decoder = Decoder(latent_channels, input_channels)
@@ -88,11 +96,19 @@ class Autoencoder(nn.Module):
         return entropy_samples - entropy_batch
 
     def compute_rec_loss(self, img, rec):
-        loss_l1 = self.l1(rec, img)
-        with torch.no_grad():
-            lap_img = self.lap(img)
-        lap_rec = self.lap(rec)
-        return 1.0 * loss_l1 + 2.0 * F.l1_loss(lap_rec, lap_img)
+        charb = lambda x, y: torch.mean(torch.sqrt((x.float() - y.float())**2 + 1e-6))
+
+        loss_pix = charb(rec, img)
+
+        grad_img = K.filters.spatial_gradient(img, order=1)
+        grad_rec = K.filters.spatial_gradient(rec, order=1)
+        loss_grad = charb(grad_rec, grad_img)
+
+        fft_img = torch.fft.rfft2(img.float(), norm="ortho")
+        fft_rec = torch.fft.rfft2(rec.float(), norm="ortho")
+        loss_fft = F.l1_loss(torch.abs(fft_rec), torch.abs(fft_img))
+
+        return 1.0 * loss_pix + 0.5 * loss_grad + 0.1 * loss_fft
 
     def save_checkpoint(self, path=None, epoch=0, loss=0.0):
         if path is None: path = self.save_path
@@ -140,6 +156,20 @@ class Autoencoder(nn.Module):
 
     def fit(self, train_loader, val_loader=None, epochs=50, early_stopping_patience=10, warmup_epochs=5):
         print(f"Start treningu: {epochs} epok (Warmup: {warmup_epochs}) | AMP: {self.use_amp}")
+        
+        if self.comet_logger:
+            self.comet_logger.log_parameters({
+                'latent_channels': self.encoder.latent_channels if hasattr(self.encoder, 'latent_channels') else 32,
+                'input_channels': self.encoder.input_channels if hasattr(self.encoder, 'input_channels') else 4,
+                'num_prototypes': self.num_prototypes,
+                'learning_rate': self.lr,
+                'max_lr': self.max_lr,
+                'epochs': epochs,
+                'warmup_epochs': warmup_epochs,
+                'early_stopping_patience': early_stopping_patience,
+                'use_amp': self.use_amp,
+                'batch_size': train_loader.batch_size if hasattr(train_loader, 'batch_size') else 'N/A'
+            })
         
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
@@ -203,7 +233,11 @@ class Autoencoder(nn.Module):
             
             avg_train_loss = train_loss_accum / len(train_loader)
             self.history['train_loss'].append(avg_train_loss)
-            self.history['learning_rates'].extend(lrs) # Dodajemy listę LR z całej epoki
+            self.history['learning_rates'].extend(lrs)
+            
+            if self.comet_logger:
+                self.comet_logger.log_metric('train_loss', avg_train_loss, step=epoch)
+                self.comet_logger.log_metric('learning_rate', lrs[-1], step=epoch)
 
             avg_val_loss = 0.0
             
@@ -215,20 +249,24 @@ class Autoencoder(nn.Module):
                     for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]"):
                         img = batch[0] if isinstance(batch, (list, tuple)) else batch
                         img = img.to(self.device, non_blocking=True)
-                        
-                        rec, logits, _, _ = self(img)
-                        loss_rec = self.compute_rec_loss(img, rec)
-                        
-                        if not is_warmup:
-                            loss_clust = self.compute_cluster_loss(logits)
-                            val_batch_loss = loss_rec + 0.1 * loss_clust
-                        else:
-                            val_batch_loss = loss_rec
+
+                        with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
+                            rec, logits, _, _ = self(img)
+                            loss_rec = self.compute_rec_loss(img, rec)
                             
-                        val_loss_accum += val_batch_loss.item()
+                            if not is_warmup:
+                                loss_clust = self.compute_cluster_loss(logits)
+                                val_batch_loss = loss_rec + 0.1 * loss_clust
+                            else:
+                                val_batch_loss = loss_rec
+                                
+                            val_loss_accum += val_batch_loss.item()
                 
                 avg_val_loss = val_loss_accum / len(val_loader)
                 self.history['val_loss'].append(avg_val_loss)
+                
+                if self.comet_logger:
+                    self.comet_logger.log_metric('val_loss', avg_val_loss, step=epoch)
                 
                 print(f" -> Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
 
@@ -243,6 +281,11 @@ class Autoencoder(nn.Module):
                         break
             else:
                 self.save_checkpoint(epoch=epoch, loss=avg_train_loss)
+        
+        if self.comet_logger:
+            if self.save_path.exists():
+                self.comet_logger.log_model('autoencoder_best', str(self.save_path))
+            self.comet_logger.end()
                 
         return self.history
     

@@ -6,301 +6,232 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-
-class ChannelAttention(nn.Module):
-    def __init__(self, channels, reduction=8):
+class FiLMLayer(nn.Module):
+    """
+    Feature-wise Linear Modulation.
+    Wstrzykuje informację o stylu (embedding klastra) w kanały obrazu.
+    Działa lepiej niż proste łączenie (concatenation).
+    """
+    def __init__(self, channels, embedding_dim):
         super().__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channels, channels // reduction, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(channels // reduction, channels, bias=False),
-            nn.Sigmoid()
-        )
+        # Warstwy uczące się skalowania (gamma) i przesunięcia (beta)
+        self.scale = nn.Linear(embedding_dim, channels)
+        self.shift = nn.Linear(embedding_dim, channels)
+
+    def forward(self, x, embedding):
+        s = self.scale(embedding).unsqueeze(2).unsqueeze(3)
+        h = self.shift(embedding).unsqueeze(2).unsqueeze(3)
+        # Wzór: out = x * (1 + scale) + shift
+        return x * (1 + s) + h
+
+class SelfAttention(nn.Module):
+    """
+    Mechanizm Attention dla małych map (8x8).
+    Pozwala modelowi 'patrzeć' na cały obrazek naraz, żeby zrozumieć kontekst globalny.
+    """
+    def __init__(self, channels):
+        super().__init__()
+        self.mha = nn.MultiheadAttention(embed_dim=channels, num_heads=4, batch_first=True)
+        self.norm = nn.LayerNorm(channels)
 
     def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * y.expand_as(x)
+        b, c, h, w = x.size()
+        # Reshape do sekwencji: [B, H*W, C]
+        x_flat = x.view(b, c, -1).permute(0, 2, 1)
+        
+        attn_out, _ = self.mha(x_flat, x_flat, x_flat)
+        x_flat = self.norm(x_flat + attn_out)
+        
+        # Powrót do obrazu: [B, C, H, W]
+        return x_flat.permute(0, 2, 1).view(b, c, h, w)
 
-class DilatedResidualBlock(nn.Module):
-    def __init__(self, channels, dilation):
+class ConditionalResidualBlock(nn.Module):
+    """
+    Blok ResNet sterowany stylem (FiLM).
+    """
+    def __init__(self, channels, embedding_dim, dilation=1):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=dilation, dilation=dilation, bias=False)
         self.bn1 = nn.BatchNorm2d(channels)
+        self.film1 = FiLMLayer(channels, embedding_dim)
+        
         self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(channels)
+        self.film2 = FiLMLayer(channels, embedding_dim)
+        
         self.relu = nn.GELU()
-        self.attn = ChannelAttention(channels)
 
-    def forward(self, x):
+    def forward(self, x, style_embedding):
         residual = x
-        out = self.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out = self.attn(out)
+        
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.film1(out, style_embedding) 
+        out = self.relu(out)
+        
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.film2(out, style_embedding)
+        
         return self.relu(out + residual)
-
 
 class LatentInpainter(nn.Module):
     def __init__(self, 
-                 latent_channels=32,
+                 latent_channels=64,   
                  num_clusters=12,
-                 embedding_dim=32,
+                 embedding_dim=64,
                  hidden_channels=128,
                  learning_rate=0.001,
                  use_amp=True,
-                 load_best=False,
-                 class_loss_weight=0.1
+                 load_best=False
                 ):
         super().__init__()
-
-        self.latent_channels = latent_channels
-        self.num_clusters = num_clusters
-        self.embedding_dim = embedding_dim
-        self.learning_rate = learning_rate
-        self.class_loss_weight = class_loss_weight
-        self.current_epoch = 0
         
+        self.num_clusters = num_clusters
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.use_amp = use_amp and torch.cuda.is_available()
-        self.best_model_path = Path('checkpoints/best_inpainter.pt')
+        self.save_path = Path('checkpoints/best_inpainter.pth')
         
-        self.label_embedding = nn.Embedding(num_clusters, embedding_dim)
+        self.cluster_styles = nn.Parameter(torch.randn(num_clusters, embedding_dim))
         
-        input_dim = latent_channels + embedding_dim
-        
-        self.encoder_block = nn.Sequential(
-            nn.Conv2d(input_dim, hidden_channels, kernel_size=3, padding=1),
+        self.classifier = nn.Sequential(
+            nn.Conv2d(latent_channels, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.GELU(),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(64, num_clusters)
+        )
+
+        self.encoder = nn.Sequential(
+            nn.Conv2d(latent_channels, hidden_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(hidden_channels),
             nn.GELU()
         )
         
-        self.middle_block = nn.Sequential(
-            DilatedResidualBlock(hidden_channels, dilation=1),
-            DilatedResidualBlock(hidden_channels, dilation=2),
-            DilatedResidualBlock(hidden_channels, dilation=4),
-            DilatedResidualBlock(hidden_channels, dilation=2),
-            DilatedResidualBlock(hidden_channels, dilation=1),
-        )
+        self.mid1 = ConditionalResidualBlock(hidden_channels, embedding_dim, dilation=1)
+        self.mid2 = ConditionalResidualBlock(hidden_channels, embedding_dim, dilation=2)
+        self.attn = SelfAttention(hidden_channels) 
+        self.mid3 = ConditionalResidualBlock(hidden_channels, embedding_dim, dilation=2)
+        self.mid4 = ConditionalResidualBlock(hidden_channels, embedding_dim, dilation=1)
 
-        self.decoder_block = nn.Sequential(
+        self.decoder = nn.Sequential(
             nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(hidden_channels),
             nn.GELU(),
             nn.Conv2d(hidden_channels, latent_channels, kernel_size=3, padding=1)
         )
 
-        self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Flatten(),
-            nn.Linear(latent_channels, 128),
-            nn.GELU(),
-            nn.Linear(128, num_clusters)
-        )
-
         self.mse_loss = nn.MSELoss()
-        self.l1_loss = nn.L1Loss()
-        self.ce_loss = nn.CrossEntropyLoss()
+        self.ce_loss = nn.CrossEntropyLoss() 
+        
+        self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=1e-4)
+        self.scaler = torch.amp.GradScaler(self.device.__str__(), enabled=self.use_amp)
         
         self.to(self.device)
 
-        self.optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=1e-4)
-        self.scheduler = None
-        self.scaler = torch.amp.GradScaler(self.device.__str__(), enabled=self.use_amp)
+        if load_best and self.save_path.exists():
+            self.load()
 
-        self.history = {'train_loss': [], 'val_loss': [], 'recon_loss': [], 'class_loss': []}
-
-        if load_best and self.best_model_path.exists():
-            self.load_checkpoint()
-
-    def forward(self, x, labels):
-        # x: [Batch, 32, 8, 8]
-        # labels: [Batch] (int)
+    def forward(self, x, return_logits=False):
+        """
+        Główny przepływ danych.
+        UWAGA: Ta metoda NIE przyjmuje labels! Sama je zgaduje.
+        """
+        logits = self.classifier(x) 
         
-        # Zamiana labela na mapę cech [Batch, 32, 1, 1]
-        emb = self.label_embedding(labels)
+        probs = F.softmax(logits, dim=1) 
         
-        # To size [Batch, 32, 8, 8]
-        emb_map = emb.view(emb.size(0), emb.size(1), 1, 1).expand(-1, -1, x.size(2), x.size(3))
+        style_embedding = torch.matmul(probs, self.cluster_styles)
         
-        # Concat
-        x_input = torch.cat([x, emb_map], dim=1)
+        h = self.encoder(x)
+        h = self.mid1(h, style_embedding)
+        h = self.mid2(h, style_embedding)
+        h = self.attn(h)
+        h = self.mid3(h, style_embedding)
+        h = self.mid4(h, style_embedding)
         
-        enc = self.encoder_block(x_input)
-        mid = self.middle_block(enc)
-        correction = self.decoder_block(mid)
+        correction = self.decoder(h)
         
-        return x + correction
-
-    def forward_train(self, x, labels):
-        repaired = self.forward(x, labels)
-        class_logits = self.classifier(repaired)
-        return repaired, class_logits
-
-    def compute_loss(self, repaired_latent, target_latent, pred_logits, target_labels):
-        l_mse = self.mse_loss(repaired_latent, target_latent)
-        l_l1 = self.l1_loss(repaired_latent, target_latent)
-        loss_recon = 0.5 * l_mse + 0.5 * l_l1
+        repaired = x + correction
         
-        if self.class_loss_weight > 0:
-            loss_class = self.ce_loss(pred_logits, target_labels)
-        else:
-            loss_class = torch.tensor(0.0, device=self.device)
-            
-        total_loss = loss_recon + (self.class_loss_weight * loss_class)
-        return total_loss, loss_recon, loss_class
+        if return_logits:
+            return repaired, logits
+        return repaired
 
-    def train_epoch(self, train_loader, encoder_model=None):
-        self.train()
-        if encoder_model: encoder_model.eval() 
+    def fit(self, train_loader, epochs=10):
+        """
+        Pętla treningowa. 
+        Tutaj (i tylko tutaj) używamy 'labels', żeby nauczyć detektywa.
+        """
+        best_loss = float('inf')
         
-        epoch_loss = 0.0
-        epoch_recon = 0.0
-        epoch_class = 0.0
-        
-        loop = tqdm(train_loader, desc="Training")
-        
-        for batch_idx, (clean_batch, corr_batch, labels) in enumerate(loop):
-            clean_data = clean_batch.to(self.device, non_blocking=True)
-            corr_data = corr_batch.to(self.device, non_blocking=True)
-            labels = labels.to(self.device, dtype=torch.long) 
-
-            if encoder_model is not None:
-                with torch.no_grad():
-                    clean_z = encoder_model(clean_data)
-                    corr_z = encoder_model(corr_data)
-            else:
-                clean_z = clean_data
-                corr_z = corr_data
-
-            self.optimizer.zero_grad(set_to_none=True)
-
-            with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
-                repaired_z, logits = self.forward_train(corr_z, labels)
-                loss, l_recon, l_class = self.compute_loss(repaired_z, clean_z, logits, labels)
-
-            self.scaler.scale(loss).backward()
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-
-            if self.scheduler is not None:
-                self.scheduler.step()
-
-            epoch_loss += loss.item()
-            epoch_recon += l_recon.item()
-            epoch_class += l_class.item()
-            
-            loop.set_postfix(loss=loss.item())
-
-        N = len(train_loader)
-        return {
-            'loss': epoch_loss / N, 
-            'recon_loss': epoch_recon / N, 
-            'class_loss': epoch_class / N
-        }
-
-    @torch.no_grad()
-    def validate_epoch(self, val_loader, encoder_model=None):
-        self.eval()
-        if encoder_model: encoder_model.eval()
-        
-        epoch_loss = 0.0
-        
-        for batch_idx, (clean_batch, corr_batch, labels) in enumerate(val_loader):
-            clean_data = clean_batch.to(self.device, non_blocking=True)
-            corr_data = corr_batch.to(self.device, non_blocking=True)
-            labels = labels.to(self.device, dtype=torch.long)
-
-            if encoder_model is not None:
-                clean_z = encoder_model(clean_data)
-                corr_z = encoder_model(corr_data)
-            else:
-                clean_z = clean_data
-                corr_z = corr_data
-
-            with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
-                repaired_z, logits = self.forward_train(corr_z, labels)
-                loss, _, _ = self.compute_loss(repaired_z, clean_z, logits, labels)
-
-            epoch_loss += loss.item()
-
-        return {'loss': epoch_loss / len(val_loader)}
-
-    def fit(self, 
-            train_loader, 
-            encoder_model, 
-            val_loader=None, 
-            epochs=30, 
-            early_stopping_patience=10):
-        
-        best_val_loss = float('inf')
-        patience_counter = 0
-
-        self.scheduler = optim.lr_scheduler.OneCycleLR(
-            self.optimizer,
-            max_lr=self.learning_rate,
-            steps_per_epoch=len(train_loader),
-            epochs=epochs,
-            pct_start=0.1, 
-            div_factor=25.0,
-            final_div_factor=1000.0,
-            anneal_strategy='cos'
-        )
-        
-        print(f"Start treningu (Conditional) na urządzeniu: {self.device}")
-
         for epoch in range(epochs):
-            self.current_epoch = epoch
+            self.train()
+            train_loss = 0.0
+            recon_loss_acc = 0.0
+            class_loss_acc = 0.0
             
-            train_metrics = self.train_epoch(train_loader, encoder_model)
+            loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
             
-            val_metrics = {'loss': 0.0}
-            if val_loader is not None:
-                val_metrics = self.validate_epoch(val_loader, encoder_model)
+            for clean_batch, corr_batch, labels in loop:
+                clean = clean_batch.to(self.device, non_blocking=True)
+                corr = corr_batch.to(self.device, non_blocking=True)
+                labels = labels.to(self.device, dtype=torch.long)
 
-            self.history['train_loss'].append(train_metrics['loss'])
-            if val_loader: self.history['val_loss'].append(val_metrics['loss'])
+                self.optimizer.zero_grad()
 
-            val_str = f"| Val: {val_metrics['loss']:.4f}" if val_loader else ""
-            print(f"Epoch {epoch+1}/{epochs} | "
-                  f"Train: {train_metrics['loss']:.4f} (Rec:{train_metrics['recon_loss']:.3f}, Cls:{train_metrics['class_loss']:.3f}) "
-                  f"{val_str}")
-
-            current_val_loss = val_metrics['loss'] if val_loader else train_metrics['loss']
-            
-            if current_val_loss < best_val_loss and current_val_loss != 0.0:
-                best_val_loss = current_val_loss
-                patience_counter = 0
-                self.save_checkpoint(self.best_model_path, epoch, best_val_loss)
-            elif current_val_loss != 0.0:
-                patience_counter += 1
-                if patience_counter >= early_stopping_patience:
-                    print(f"Early stopping triggered at epoch {epoch+1}")
-                    break
+                with torch.amp.autocast(self.device.__str__(), enabled=self.use_amp):
+                    repaired, predicted_logits = self.forward(corr, return_logits=True)
                     
-        return self.history
+                    l_rec = self.mse_loss(repaired, clean)
+                    
+                    l_cls = self.ce_loss(predicted_logits, labels)
+                    
+                    loss = l_rec + 0.2 * l_cls
 
-    def save_checkpoint(self, path, epoch, val_loss):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
-            'model_state_dict': self.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'epoch': epoch,
-            'val_loss': val_loss
-        }, path)
-        print(f"Saved checkpoint: {path}")
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                
+                train_loss += loss.item()
+                recon_loss_acc += l_rec.item()
+                class_loss_acc += l_cls.item()
+                
+                loop.set_postfix(
+                    mse=f"{l_rec.item():.4f}", 
+                    cls=f"{l_cls.item():.4f}"
+                )
 
-    def load_checkpoint(self, path=None):
-        if path is None:
-            path = self.best_model_path
-        if not path.exists():
-            print(f"Checkpoint {path} not found.")
-            return
-        ckpt = torch.load(path, map_location=self.device)
-        self.load_state_dict(ckpt["model_state_dict"])
-        self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-        print(f"Loaded inpainter from {path}")
+            avg_loss = train_loss / len(train_loader)
+            print(f"Epoch {epoch+1} done. Avg Loss: {avg_loss:.5f} (Rec: {recon_loss_acc/len(train_loader):.4f}, Cls: {class_loss_acc/len(train_loader):.4f})")
+            
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                self.save(self.save_path)
+
+    def predict(self, corrupted_latent):
+        """
+        Metoda do użycia na produkcji.
+        Przyjmuje TYLKO zepsuty latent. Nie wymaga labels.
+        """
+        self.eval()
+        with torch.no_grad():
+            if corrupted_latent.dim() == 3:
+                corrupted_latent = corrupted_latent.unsqueeze(0)
+            
+            corrupted_latent = corrupted_latent.to(self.device)
+            
+            # Sieć sama zgaduje klaster i naprawia
+            repaired = self.forward(corrupted_latent)
+            
+            return repaired
+
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+        print(f"Model saved to {path}")
+
+    def load(self, path=None):
+        self.load_state_dict(torch.load(self.save_path, map_location=self.device))
+        self.eval()
+        print(f"Model loaded from {path}")

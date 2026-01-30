@@ -150,7 +150,7 @@ def load_sr_resources():
 def load_ae_resources():
     with st.spinner('Ładowanie modelu Autoencoder...'):
         _, test_loader_rgba, _ = load_data(add_fourth_channel=True, num_workers=0)
-        autoencoder = Autoencoder(input_channels=4, load_best=True)
+        autoencoder = Autoencoder(latent_channels=64, input_channels=4, load_best=True)
         autoencoder.eval()
         autoencoder.to(device)
     return test_loader_rgba, autoencoder
@@ -158,7 +158,12 @@ def load_ae_resources():
 @st.cache_resource
 def load_inpainter_resources():
     with st.spinner('Ładowanie modelu Inpainter...'):
-        inpainter = LatentInpainter(latent_channels=32, num_clusters=12, load_best=True)
+        inpainter = LatentInpainter(
+            latent_channels=64,     
+            num_clusters=12,        
+            learning_rate=0.001,
+            load_best=True
+        )
         inpainter.eval()
         inpainter.to(device)
     return inpainter
