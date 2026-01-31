@@ -289,12 +289,13 @@ class Autoencoder(nn.Module):
                 
         return self.history
     
-    def extract_latent(self, dataloader, use_projector=False): 
+    def extract_latent(self, dataloader, use_projector=False, verbose=True): 
         self.eval()
         latents = []
-        print("Extracting latents...")
+        
+        iterator = tqdm(dataloader, desc="Extracting latents") if verbose else dataloader
         with torch.no_grad():
-            for batch in tqdm(dataloader):
+            for batch in iterator:
                 img = batch[0] if isinstance(batch, (list, tuple)) else batch
                 img = img.to(self.device)
                 

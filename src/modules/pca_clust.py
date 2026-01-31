@@ -17,9 +17,6 @@ def preprocess_spatial_latents(latents):
     
     if features.ndim != 2:
         raise ValueError(f"Oczekiwano latentów 2D [N, D], otrzymano: {list(features.shape)}")
-        
-    print(f"[Preprocessing] Otrzymano latenty: {list(features.shape)}")
-    print("[Preprocessing] Normalizacja L2...")
     
     features = normalize(features, norm='l2', axis=1)
     
